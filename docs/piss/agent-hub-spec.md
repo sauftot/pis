@@ -2,7 +2,7 @@
 
 piss is a fork of pi (`earendil-works/pi`, coding-agent 1.5.x). Goal: manage subagents from inside the chat the way omp (`can1357/oh-my-pi`) does: see them, read them, steer them, kill and revive them, without leaving the session.
 
-Status: research complete, spec draft, no implementation yet.
+Status: phase 1 (headless registry, lifecycle, bus) implemented in `packages/coding-agent/src/core/agents/` with 45 tests in `test/suite/agents/`. Phases 2-6 not started.
 
 ## 1. Problem
 
@@ -122,8 +122,8 @@ interface AgentRegistry {
 
 `send({ from, to, body, interrupt?, broadcast? }) -> Receipt { to, outcome: injected|revived|failed, error? }`.
 
-- Resolve target, `ensureLive` if needed, call `session.deliverAgentMessage(msg)`.
-- New `AgentSession.deliverAgentMessage`: if `isStreaming` then `steer` (or queue as follow-up when `interrupt:false`), else `prompt` with `source: "agent"`. Message rendered with sender attribution in the target's transcript (custom message type `agent-message`, registered renderer).
+- Resolve target, `ensureLive` if needed, call the free function `deliverAgentMessage(session, envelope)` (no new method on `AgentSession`, to keep upstream rebases cheap).
+- `deliverAgentMessage` makes one `session.prompt(text, { source: "extension", expandPromptTemplates: false, streamingBehavior, preflightResult })` call. `streamingBehavior` is `steer`, or `followUp` when `interrupt:false`; `prompt` itself starts a run when idle and queues when streaming, so there is no isStreaming race. `preflightResult` resolves the receipt as soon as the session accepts the message, so the sender never waits for the run. `expandPromptTemplates:false` stops an agent-authored body from running as an extension command or template. Sender attribution is a text prefix (`Message from agent "<id>":`); a custom message type with a renderer is deferred to the focus phase.
 - `to: "all"` only from `main`; fans out to `listVisibleTo(sender)`.
 - Never block on the recipient's reply. Replies are the recipient's normal output; for model-to-model use the recipient replies by sending to the sender id.
 - Model-facing surface: tool `message_agent({ to, message, interrupt? })`, plus `read`/`write` support for `agent://<id>` later (phase 5). Start with an explicit tool; URL schemes are an omp-specific indirection pi does not need.
@@ -191,12 +191,23 @@ Then port `examples/extensions/subagent` to use it (child steerable, listed in H
 | Phase | Deliverable | Exit test |
 |-------|-------------|-----------|
 | 0 | Fork hygiene: rename branding to piss (package scope, binary `piss`, config dir `.piss` or keep `.pi` per decision O1), upstream remote, CI check | `npm run check` green, `piss --version` |
-| 1 | Registry + lifecycle + bus, headless. `AgentSession.deliverAgentMessage`. Unit tests with faux provider harness (`test/suite/harness.ts`): steer running, prompt idle, revive parked, failed unknown, broadcast rules, stale-generation guard | tests pass |
+| 1 (done) | Registry + lifecycle + bus, headless. `AgentSession.deliverAgentMessage`. Unit tests with faux provider harness (`test/suite/harness.ts`): steer running, prompt idle, revive parked, failed unknown, broadcast rules, stale-generation guard | tests pass |
 | 2 | `task` tool + `message_agent` tool, persistence under `agents/`, result delivery to parent, concurrency/depth limits | model can spawn 2 agents, message one mid-run, parent gets both results |
 | 3 | Focus controller + `/agents` roster (no overlay yet) + footer indicator | user focuses a running child, steers it, returns to main; no duplicated messages |
 | 4 | Hub overlay P-A then P-B/P-C, keybindings, pinned list | manual QA script in section 9 |
 | 5 | Extension `ctx.agents`, RPC commands, port subagent example, docs | example extension steerable |
 | 6 | Optional: worktree isolation, RPC-backed remote agents, click-to-focus, advisor rows | per feature |
+
+## 7a. Phase 1 notes (as built)
+
+- Files: `agent-types.ts`, `agent-registry.ts`, `agent-lifecycle.ts`, `agent-bus.ts`, `index.ts`. Not yet exported from the package entry; that is phase 5.
+- `AgentSessionHandle` is a narrow interface (`isStreaming`, `sessionFile`, `subscribe`, `prompt`, `abort`, `dispose`) that `AgentSession` satisfies structurally. This is the seam for a later RPC-backed agent (D1).
+- The registry is an instance, not a process global; the owner (runtime services) creates it. `listVisibleTo` returns only running or idle agents so a broadcast never revives a parked one.
+- `park` refuses a session that is already streaming: between a message being accepted and `agent_start` the ref still reads `idle`, and an idle-TTL park in that window would dispose a session mid-delivery.
+- Revive is coalesced per agent and guarded by an epoch that `park`, `kill` and `release` bump, so a slow revive that finishes after a kill is disposed instead of resurrecting the agent.
+- Known gap: the ref reads `idle` for a short window after a message is accepted and before `agent_start`. Rosters may flicker; the park guard above covers the safety issue. Revisit if the Hub shows it.
+- Not in phase 1: usage metrics on `AgentRef`, persisted tombstones and the `agents/` sidecar (phase 2), the `agent-message` custom message type (phase 3).
+- Test harness note: `createHarness({ sessionManager })` does not replay the transcript into the agent, unlike `createAgentSession`. Revive tests set `session.agent.state.messages` from `sessionManager.buildSessionContext()` to match the SDK.
 
 ## 8. Risks
 
