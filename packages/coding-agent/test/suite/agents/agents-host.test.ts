@@ -84,6 +84,8 @@ describe("AgentsHost", () => {
 			holds?: string[];
 			failFirst?: Record<string, string>;
 			mainRefusals?: number;
+			/** Model patterns the child factory refuses, as the real one does for an unknown model. */
+			refuseModels?: string[];
 		} = {},
 	) {
 		const children = new Map<string, ScriptedChild>();
@@ -94,6 +96,9 @@ describe("AgentsHost", () => {
 			definitions: () => [worker, scout],
 			settings: () => settings,
 			createChildSession: async (request) => {
+				if (request.model && options.refuseModels?.includes(request.model)) {
+					throw new Error(`Model "${request.model}" not found.`);
+				}
 				requests.push(request);
 				const child = scriptedChild({
 					hold: options.holds?.includes(request.id) ?? false,
@@ -109,7 +114,7 @@ describe("AgentsHost", () => {
 		host.attachMain(main);
 		const spawn = (
 			name: string,
-			extra: { callerId?: string; agent?: string; task?: string; context?: string } = {},
+			extra: { callerId?: string; agent?: string; task?: string; context?: string; model?: string } = {},
 		) =>
 			host.spawn({
 				callerId: extra.callerId ?? "main",
@@ -117,6 +122,7 @@ describe("AgentsHost", () => {
 				name,
 				task: extra.task ?? "do the thing",
 				context: extra.context,
+				model: extra.model,
 			});
 		return { host, main, children, requests, spawn };
 	}
@@ -197,6 +203,44 @@ describe("AgentsHost", () => {
 			const { requests, spawn } = setup();
 			expect((await spawn("Alpha", { agent: "scout" })).agent).toBe("scout");
 			expect(requests[0]?.definition.name).toBe("scout");
+		});
+	});
+
+	describe("model choice", () => {
+		it("passes a per-call model to the child and reports it", async () => {
+			const { requests, spawn } = setup();
+			const result = await spawn("Alpha", { model: "haiku" });
+			expect(result).toEqual({ id: "Alpha", agent: "worker", model: "haiku" });
+			expect(requests[0]?.model).toBe("haiku");
+		});
+
+		it("leaves the model unset when the call names none", async () => {
+			const { requests, spawn } = setup();
+			await spawn("Alpha");
+			expect(requests[0]?.model).toBeUndefined();
+			expect(requests[0]?.restrictModelTo).toBeUndefined();
+		});
+
+		it("restricts a per-call model to the allowed list, and only when one was chosen", async () => {
+			const { requests, spawn } = setup({ settings: { allowedModels: ["haiku", "sonnet"] } });
+			await spawn("Alpha", { model: "haiku" });
+			await spawn("Beta");
+			expect(requests[0]?.restrictModelTo).toEqual(["haiku", "sonnet"]);
+			expect(requests[1]?.restrictModelTo).toBeUndefined();
+		});
+
+		it("keeps the chosen model when the agent is revived, without applying the allowlist again", async () => {
+			const { host, requests, spawn } = setup({ settings: { allowedModels: ["haiku"] } });
+			await spawn("Alpha", { model: "haiku" });
+			host.lifecycle.park("Alpha");
+			await host.lifecycle.ensureLive("Alpha");
+			expect(requests.at(-1)?.model).toBe("haiku");
+			expect(requests.at(-1)?.restrictModelTo).toBeUndefined();
+		});
+
+		it("exposes the allowed models", () => {
+			expect(setup().host.allowedModels()).toBeUndefined();
+			expect(setup({ settings: { allowedModels: ["haiku"] } }).host.allowedModels()).toEqual(["haiku"]);
 		});
 	});
 
@@ -333,6 +377,56 @@ describe("AgentsHost", () => {
 			await expect(
 				tool.execute("call", { tasks: [{ task: "y", agent: "nope" }] }, undefined, undefined, context),
 			).rejects.toThrow("Unknown agent");
+		});
+
+		it("task accepts a model per item and says which model each agent got", async () => {
+			const { host, requests } = setup();
+			const tool = host.customTools("main", 0)[0]!;
+			const result = await tool.execute(
+				"call",
+				{
+					tasks: [
+						{ name: "A", task: "x", model: "haiku" },
+						{ name: "B", task: "y" },
+					],
+				},
+				undefined,
+				undefined,
+				context,
+			);
+			expect(text(result)).toContain("- A (worker, model haiku)");
+			expect(text(result)).toContain("- B (worker)");
+			expect(requests.map((r) => r.model)).toEqual(["haiku", undefined]);
+			const schema = JSON.stringify(tool.parameters);
+			expect(schema).toContain('"model"');
+		});
+
+		it("task tells the model it can pick a cheaper model, or exactly which ones it may pick", () => {
+			expect(setup().host.customTools("main", 0)[0]!.description).toContain(
+				"model field to run it on a cheaper or faster model",
+			);
+			const restricted = setup({ settings: { allowedModels: ["haiku", "sonnet"] } }).host.customTools("main", 0)[0]!;
+			expect(restricted.description).toContain("The model field accepts only: haiku, sonnet.");
+			expect(restricted.description).not.toContain("cheaper or faster");
+		});
+
+		it("task reports a model the factory refuses as a failed item, and still spawns the rest", async () => {
+			const { host } = setup({ refuseModels: ["bad"] });
+			const tool = host.customTools("main", 0)[0]!;
+			const result = await tool.execute(
+				"call",
+				{
+					tasks: [
+						{ name: "A", task: "x", model: "bad" },
+						{ name: "B", task: "y" },
+					],
+				},
+				undefined,
+				undefined,
+				context,
+			);
+			expect(text(result)).toContain("Spawned 1 agent:");
+			expect(text(result)).toContain('- failed: Model "bad" not found');
 		});
 
 		it("task lists the available agents in its description", () => {

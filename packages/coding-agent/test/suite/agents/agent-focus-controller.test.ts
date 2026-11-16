@@ -63,7 +63,14 @@ describe("AgentFocusController", () => {
 			asViewSession: (handle: AgentSessionHandle) => handle as unknown as AgentSession,
 		});
 		const spawn = async (name: string) => {
-			await host.spawn({ callerId: "main", agent: undefined, name, task: "work", context: undefined });
+			await host.spawn({
+				callerId: "main",
+				agent: undefined,
+				name,
+				task: "work",
+				context: undefined,
+				model: undefined,
+			});
 			// The fake child never runs; settle it so it is idle like a finished agent.
 			children.get(name)!.emit(agentSettled);
 		};

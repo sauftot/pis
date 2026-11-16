@@ -230,6 +230,13 @@
           "type": "number",
           "description": "How deep agents may spawn agents. 1 means only the main agent spawns.",
           "default": 1
+        },
+        "allowedModels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Models the task tool's model field may choose, as model patterns such as haiku or anthropic/claude-haiku-4-5. Unset allows any authenticated model. An empty list allows none."
         }
       }
     },

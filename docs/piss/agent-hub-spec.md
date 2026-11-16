@@ -2,7 +2,7 @@
 
 piss is a fork of pi (`earendil-works/pi`, coding-agent 1.5.x). Goal: manage subagents from inside the chat the way omp (`can1357/oh-my-pi`) does: see them, read them, steer them, kill and revive them, without leaving the session.
 
-Status: phases 1, 2 and 3 implemented (core in `packages/coding-agent/src/core/agents/`, UI in `src/modes/interactive/agents/`; 169 tests in `test/suite/agents/`, including the real InteractiveMode driven on a virtual terminal). Enable with `agents.enabled`. User guide: [agents.md](./agents.md). Phases 4-6 not started; the hub of phase 4 is partly delivered early (see 7c).
+Status: phases 1, 2 and 3 implemented (core in `packages/coding-agent/src/core/agents/`, UI in `src/modes/interactive/agents/`; 200 tests in `test/suite/agents/`, including the real InteractiveMode driven on a virtual terminal). Enable with `agents.enabled`. User guide: [agents.md](./agents.md). Phases 4-6 not started; the hub of phase 4 is partly delivered early (see 7c).
 
 ## 1. Problem
 
@@ -262,6 +262,21 @@ Known limits:
 - No mouse support.
 - Tool calls already running when an agent is focused do not get a card until they finish; the rest of the run renders live.
 - Verified on a virtual terminal (xterm-headless), not a real one.
+
+## 7d. Per-call subagent model (as built)
+
+The `task` tool takes an optional `model` per item, so a stronger main model can delegate cheap work to a faster one. User-facing description: [agents.md](./agents.md#choosing-the-subagents-model).
+
+- Order: the call's `model`, then the agent definition's `model:`, then the parent's model.
+- Resolution (`child-model.ts`) reuses the CLI resolver (fuzzy names, `provider/model`, `:level` suffix) and adds rules a subagent needs:
+  - Unknown, unauthenticated or disallowed models fail the spawn. Before this, an unresolvable definition `model:` silently fell back to the parent's model, which changes cost without telling anyone. The resolver also invents a "custom model" for an id the provider does not list; that is refused.
+  - A bare name prefers the parent's provider. Found by a real run: with both `anthropic` and `amazon-bedrock` configured, `haiku` resolved to the Bedrock model (whose SSO token had expired), not the Anthropic one the main agent runs on. The preference only counts when that provider really lists the model, so it never makes another provider's model unreachable. `provider/model` still wins.
+  - Errors list the models that would work, parent's provider first, so the model that chose can correct itself. The CLI resolver's "use `--list-models`" advice is replaced because a model cannot run it.
+- `agents.allowedModels` restricts what a call may choose (unset: any authenticated model; `[]`: none). The task tool description then lists exactly those models. It applies to a fresh spawn's per-call model only, not to a definition's `model:` (operator-written) and not to a revive.
+- The model pattern is saved in the agent's `meta.json` and used again on revive, including after a restart.
+- A refused spawn leaves nothing behind: the model is resolved before any session directory is created, and the host passes the directory path without creating it.
+
+Verified with the real build and real credentials over RPC: `anthropic/claude-sonnet-5-5` called `task` with `model: "haiku"`, the child ran on `anthropic/claude-haiku-5-5` and answered; an unknown model produced the error above and no child.
 
 ## 8. Risks
 

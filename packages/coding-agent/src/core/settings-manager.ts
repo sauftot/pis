@@ -925,13 +925,20 @@ export class SettingsManager {
 		};
 	}
 
-	getAgentsSettings(): { enabled: boolean; idleParkMs: number; maxConcurrency: number; maxDepth: number } {
+	getAgentsSettings(): {
+		enabled: boolean;
+		idleParkMs: number;
+		maxConcurrency: number;
+		maxDepth: number;
+		allowedModels: string[] | undefined;
+	} {
 		const agents = this.settings.agents;
 		return {
 			enabled: agents?.enabled ?? SETTINGS_DEFAULTS.agents.enabled,
 			idleParkMs: (agents?.idleParkSeconds ?? SETTINGS_DEFAULTS.agents.idleParkSeconds) * 1000,
 			maxConcurrency: agents?.maxConcurrency ?? SETTINGS_DEFAULTS.agents.maxConcurrency,
 			maxDepth: agents?.maxDepth ?? SETTINGS_DEFAULTS.agents.maxDepth,
+			allowedModels: agents?.allowedModels ? [...agents.allowedModels] : undefined,
 		};
 	}
 

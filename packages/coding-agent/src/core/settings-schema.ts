@@ -96,6 +96,12 @@ const AgentsSettingsSchema = Type.Object({
 			default: SETTINGS_DEFAULTS.agents.maxDepth,
 		}),
 	),
+	allowedModels: Type.Optional(
+		Type.Array(Type.String(), {
+			description:
+				"Models the task tool's model field may choose, as model patterns such as haiku or anthropic/claude-haiku-4-5. Unset allows any authenticated model. An empty list allows none.",
+		}),
+	),
 });
 
 const TerminalSettingsSchema = Type.Object({

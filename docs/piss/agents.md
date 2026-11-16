@@ -16,6 +16,7 @@ In `~/.pi/agent/settings.json` (or a project's `.pi/settings.json`):
 | `agents.maxConcurrency` | `4` | Subagent runs at once; the rest wait for a slot |
 | `agents.maxDepth` | `1` | How deep agents may spawn agents. `1`: only the main agent spawns |
 | `agents.idleParkSeconds` | `300` | A finished agent is parked to disk after this long. `0` never parks |
+| `agents.allowedModels` | unset | Models the model may choose for a subagent (patterns such as `haiku`). Unset allows any authenticated model; `[]` allows none |
 
 ## Hotkeys
 
@@ -91,9 +92,29 @@ Messaging from the hub (`M`) is the quick way to nudge an agent when you do not 
 
 Everything you type to an agent, and its replies, is saved in its own transcript under the session's `agents/` directory. A finished run's report is also sent to the agent that spawned it, even when you were the one who steered it.
 
+## Choosing the subagent's model
+
+The `task` tool takes an optional `model` for each agent, so a stronger main model can hand cheap work to a faster one:
+
+```
+task({ tasks: [{ name: "Scout", task: "find where auth tokens are validated", model: "haiku" }] })
+```
+
+The model accepts what `--model` accepts: `haiku`, `anthropic/claude-haiku-4-5`, or `haiku:low` for a thinking level. The tool description tells the model it can do this, so ask in plain words: "use haiku scouts for the search."
+
+Which model an agent runs on, in order: the call's `model`, then its agent type's `model:` (below), then the main agent's model.
+
+An agent that cannot get its model fails to spawn rather than quietly running on a different one, because that would change what the work costs. The error names the models that would work, so the main model can retry. It fails when the model is unknown, its provider has no credentials, or it is outside `agents.allowedModels`. To limit what the model can pick:
+
+```json
+{ "agents": { "allowedModels": ["haiku", "sonnet"] } }
+```
+
+When set, the tool description lists exactly those models. An agent keeps its model when it is parked and revived, including after a restart.
+
 ## Agent types
 
-`worker` is built in. Add your own as markdown files in `~/.pi/agent/agents/` (or `.pi/agents/` in a trusted project):
+`worker` is built in and uses the model rules above. Add your own as markdown files in `~/.pi/agent/agents/` (or `.pi/agents/` in a trusted project):
 
 ```markdown
 ---

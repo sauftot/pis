@@ -14,17 +14,27 @@ import { SessionManager } from "../../../src/core/session-manager.ts";
 import { SettingsManager } from "../../../src/core/settings-manager.ts";
 import type { ExtensionAPI } from "../../../src/index.ts";
 
-export async function bootAgentsRuntime(options: { agentsEnabled: boolean; tokensPerSecond?: number }) {
+export async function bootAgentsRuntime(options: {
+	agentsEnabled: boolean;
+	tokensPerSecond?: number;
+	allowedModels?: string[];
+}) {
 	const tempDir = mkdtempSync(join(tmpdir(), "piss-e2e-"));
 	mkdirSync(join(tempDir, "sessions"), { recursive: true });
-	const faux = registerFauxProvider({ models: [{ id: "faux-1" }], tokensPerSecond: options.tokensPerSecond });
+	// The main agent runs on `faux-1`; `faux-2` stands in for the cheaper model it delegates to.
+	const faux = registerFauxProvider({
+		models: [{ id: "faux-1" }, { id: "faux-2" }],
+		tokensPerSecond: options.tokensPerSecond,
+	});
 	const model = faux.getModel();
 
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
 		const services = await createAgentSessionServices({
 			cwd,
 			agentDir: tempDir,
-			settingsManager: SettingsManager.inMemory({ agents: { enabled: options.agentsEnabled, idleParkSeconds: 0 } }),
+			settingsManager: SettingsManager.inMemory({
+				agents: { enabled: options.agentsEnabled, idleParkSeconds: 0, allowedModels: options.allowedModels },
+			}),
 			resourceLoaderOptions: {
 				extensionFactories: [
 					(pi: ExtensionAPI) => {

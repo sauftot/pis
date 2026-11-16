@@ -12,17 +12,20 @@ export interface SpawnRequest {
 	name: string | undefined;
 	task: string;
 	context: string | undefined;
+	model: string | undefined;
 }
 
 export interface SpawnResult {
 	id: string;
 	agent: string;
+	model: string | undefined;
 }
 
 /** What the tools need from the agents host. */
 export interface AgentToolsHost {
 	readonly bus: AgentBus;
 	availableAgents(): AgentDefinition[];
+	allowedModels(): string[] | undefined;
 	spawn(request: SpawnRequest): Promise<SpawnResult>;
 }
 
@@ -35,6 +38,13 @@ const taskSchema = Type.Object({
 				Type.String({ description: "Short CamelCase name. It becomes the agent's id and message address." }),
 			),
 			agent: Type.Optional(Type.String({ description: "Agent type to run. Defaults to `worker`." })),
+			model: Type.Optional(
+				Type.String({
+					description:
+						"Model for this agent, such as `haiku`, `anthropic/claude-haiku-4-5` or `haiku:low`. " +
+						"Defaults to the agent type's model, else yours.",
+				}),
+			),
 			task: Type.String({
 				description: "Complete, self-contained instructions. The agent has not seen this conversation.",
 			}),
@@ -61,17 +71,22 @@ export function createTaskTool(host: AgentToolsHost, callerId: string): ToolDefi
 		.availableAgents()
 		.map((agent) => `${agent.name}: ${agent.description}`)
 		.join("; ");
+	const allowed = host.allowedModels();
+	const modelGuidance = allowed
+		? ` The model field accepts only: ${allowed.join(", ")}.`
+		: " Set a task's model field to run it on a cheaper or faster model.";
 	return defineTool({
 		name: "task",
 		label: "task",
 		description:
 			"Spawn background subagents, each with its own context window and a fresh conversation. They run in " +
 			"parallel while you continue. Each reports back to you in a message when it finishes, so do not poll. " +
-			`Available agents: ${agents}.`,
+			`Available agents: ${agents}.${modelGuidance}`,
 		promptSnippet: "Spawn background subagents for independent subtasks",
 		promptGuidelines: [
 			"Use task for independent subtasks that would bloat your context or can run in parallel; do small tasks yourself.",
 			"Write each task as complete instructions: a subagent has not seen this conversation.",
+			"Give simple work (searching, recon, summarising, mechanical edits) a cheaper, faster model through the task's model field; keep hard reasoning on your own model.",
 		],
 		parameters: taskSchema,
 		async execute(_toolCallId, params) {
@@ -84,6 +99,7 @@ export function createTaskTool(host: AgentToolsHost, callerId: string): ToolDefi
 							name: item.name,
 							task: item.task,
 							context: params.context,
+							model: item.model,
 						});
 						return { ok: true, spawned };
 					} catch (error) {
@@ -97,7 +113,7 @@ export function createTaskTool(host: AgentToolsHost, callerId: string): ToolDefi
 
 			const lines = [
 				`Spawned ${spawned.length} agent${spawned.length === 1 ? "" : "s"}:`,
-				...spawned.map((agent) => `- ${agent.id} (${agent.agent})`),
+				...spawned.map((agent) => `- ${agent.id} (${agent.agent}${agent.model ? `, model ${agent.model}` : ""})`),
 				...errors.map((error) => `- failed: ${error}`),
 				"They run in the background and each sends you a message when it finishes. Use message_agent to redirect one.",
 			];

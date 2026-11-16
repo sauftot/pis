@@ -82,7 +82,14 @@ describe("agent persistence across a restart", () => {
 			[fauxAssistantMessage("noted")],
 		);
 
-		await host.spawn({ callerId: "main", agent: undefined, name: "Alpha", task: "inspect auth", context: undefined });
+		await host.spawn({
+			callerId: "main",
+			agent: undefined,
+			name: "Alpha",
+			task: "inspect auth",
+			context: undefined,
+			model: undefined,
+		});
 		await vi.waitFor(() => expect(getAssistantTexts(main)).toContain("noted"));
 		expect(getUserTexts(main)).toEqual(['Agent "Alpha" finished:\n\nalpha is done']);
 
@@ -101,6 +108,7 @@ describe("agent persistence across a restart", () => {
 			name: "Alpha",
 			task: "inspect auth",
 			context: undefined,
+			model: undefined,
 		});
 		await vi.waitFor(() => expect(getAssistantTexts(first.main)).toContain("noted"));
 		await vi.waitFor(() => expect(first.host.registry.get("Alpha")?.status).toBe("idle"));
@@ -124,10 +132,60 @@ describe("agent persistence across a restart", () => {
 		expect(getUserTexts(second.main)).toEqual(['Agent "Alpha" finished:\n\nstill here']);
 	});
 
+	it("remembers the model an agent was spawned with, so a revive after a restart uses it", async () => {
+		const root = newRoot();
+		const first = await boot(root, [[fauxAssistantMessage("done")]], [fauxAssistantMessage("noted")]);
+		await first.host.spawn({
+			callerId: "main",
+			agent: undefined,
+			name: "Alpha",
+			task: "work",
+			context: undefined,
+			model: "haiku",
+		});
+		await vi.waitFor(() => expect(getAssistantTexts(first.main)).toContain("noted"));
+		await vi.waitFor(() => expect(first.host.registry.get("Alpha")?.status).toBe("idle"));
+		expect(new AgentStore(join(root, "agents")).read("Alpha")?.model).toBe("haiku");
+		await first.host.dispose();
+
+		const second = await boot(root, [[fauxAssistantMessage("again")]], [fauxAssistantMessage("ok")]);
+		second.host.restorePersisted();
+		await second.host.bus.send({ from: "main", to: "Alpha", body: "continue" });
+		expect(second.requests[0]?.model).toBe("haiku");
+		expect(second.requests[0]?.restrictModelTo).toBeUndefined();
+	});
+
+	it("leaves no trace on disk when the child factory refuses a spawn", async () => {
+		const root = newRoot();
+		const host = new AgentsHost({
+			store: new AgentStore(join(root, "agents")),
+			definitions: () => [worker],
+			settings: () => ({ idleParkMs: 0, maxConcurrency: 4, maxDepth: 1 }),
+			createChildSession: async () => {
+				throw new Error('Model "bad" not found.');
+			},
+		});
+		hosts.push(host);
+		host.attachMain((await createHarness()).session);
+
+		await expect(
+			host.spawn({ callerId: "main", agent: undefined, name: "Alpha", task: "x", context: undefined, model: "bad" }),
+		).rejects.toThrow("not found");
+		expect(existsSync(join(root, "agents", "Alpha"))).toBe(false);
+		expect(host.registry.get("Alpha")).toBeUndefined();
+	});
+
 	it("keeps a killed agent dead across a restart until it is messaged", async () => {
 		const root = newRoot();
 		const first = await boot(root, [[fauxAssistantMessage("done")]], [fauxAssistantMessage("noted")]);
-		await first.host.spawn({ callerId: "main", agent: undefined, name: "Alpha", task: "work", context: undefined });
+		await first.host.spawn({
+			callerId: "main",
+			agent: undefined,
+			name: "Alpha",
+			task: "work",
+			context: undefined,
+			model: undefined,
+		});
 		await vi.waitFor(() => expect(getAssistantTexts(first.main)).toContain("noted"));
 		await vi.waitFor(() => expect(first.host.registry.get("Alpha")?.status).toBe("idle"));
 		await first.host.lifecycle.kill("Alpha");
@@ -146,7 +204,14 @@ describe("agent persistence across a restart", () => {
 	it("does not reuse the id of an agent saved earlier", async () => {
 		const root = newRoot();
 		const first = await boot(root, [[fauxAssistantMessage("done")]], [fauxAssistantMessage("noted")]);
-		await first.host.spawn({ callerId: "main", agent: undefined, name: "Alpha", task: "work", context: undefined });
+		await first.host.spawn({
+			callerId: "main",
+			agent: undefined,
+			name: "Alpha",
+			task: "work",
+			context: undefined,
+			model: undefined,
+		});
 		await vi.waitFor(() => expect(getAssistantTexts(first.main)).toContain("noted"));
 		await first.host.dispose();
 
@@ -157,6 +222,7 @@ describe("agent persistence across a restart", () => {
 			name: "Alpha",
 			task: "other",
 			context: undefined,
+			model: undefined,
 		});
 		expect(spawned.id).toBe("Alpha2");
 	});

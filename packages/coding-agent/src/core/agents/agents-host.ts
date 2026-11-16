@@ -27,6 +27,8 @@ export interface AgentsSettings {
 	maxConcurrency: number;
 	/** How deep agents may spawn agents. 1 means only the main agent spawns. */
 	maxDepth: number;
+	/** Models a `task` call may choose with its `model` field. Undefined allows any authenticated model. */
+	allowedModels?: string[] | undefined;
 }
 
 /** What a child session needs from the layer that knows how to build sessions. */
@@ -39,6 +41,10 @@ export interface ChildSessionRequest {
 	sessionFile: string | undefined;
 	/** Tools every child gets: `message_agent`, plus `task` when it may spawn. */
 	customTools: ToolDefinition[];
+	/** Model pattern chosen for this agent (per call, or when it was spawned). Overrides the definition's. */
+	model: string | undefined;
+	/** When set, `model` must resolve to one of these patterns' models. Only a fresh spawn is restricted. */
+	restrictModelTo: string[] | undefined;
 }
 
 export type ChildSessionFactory = (request: ChildSessionRequest) => Promise<AgentSessionHandle>;
@@ -57,6 +63,7 @@ const DELIVERY_ATTEMPTS = 4;
 export interface AgentInfo {
 	agent: string;
 	task: string;
+	model: string | undefined;
 }
 
 export class AgentsHost implements AgentToolsHost {
@@ -108,6 +115,11 @@ export class AgentsHost implements AgentToolsHost {
 		return true;
 	}
 
+	/** Models `task` may choose from, or undefined when any authenticated model is allowed. */
+	allowedModels(): string[] | undefined {
+		return this.options.settings().allowedModels;
+	}
+
 	availableAgents(): AgentDefinition[] {
 		return this.options.definitions();
 	}
@@ -139,9 +151,11 @@ export class AgentsHost implements AgentToolsHost {
 		const session = await this.options.createChildSession({
 			id,
 			definition,
-			sessionDir: this.options.store.ensureDir(id),
+			sessionDir: this.options.store.dirFor(id),
 			sessionFile: undefined,
 			customTools: this.customTools(id, callerDepth + 1),
+			model: request.model,
+			restrictModelTo: request.model ? this.allowedModels() : undefined,
 		});
 		const ref = this.registry.register({
 			id,
@@ -153,13 +167,14 @@ export class AgentsHost implements AgentToolsHost {
 			status: "running",
 		});
 		this.registry.setActivity(id, "waiting for a slot", ref);
-		this.info.set(id, { agent: definition.name, task: request.task });
+		this.info.set(id, { agent: definition.name, task: request.task, model: request.model });
 		this.options.store.write({
 			id,
 			displayName: id,
 			agent: definition.name,
 			parentId: request.callerId,
 			task: request.task,
+			model: request.model,
 			sessionFile: session.sessionFile ?? null,
 			createdAt: ref.createdAt,
 			killed: false,
@@ -167,7 +182,7 @@ export class AgentsHost implements AgentToolsHost {
 		this.lifecycle.adopt(id, { reviver: (stale) => this.revive(stale) });
 		this.watchResults(id, session);
 		void this.runFirstPrompt(ref, session, initialPrompt(id, request));
-		return { id, agent: definition.name };
+		return { id, agent: definition.name, model: request.model };
 	}
 
 	/**
@@ -188,7 +203,7 @@ export class AgentsHost implements AgentToolsHost {
 				status: meta.killed ? "aborted" : "parked",
 				createdAt: meta.createdAt,
 			});
-			this.info.set(meta.id, { agent: meta.agent, task: meta.task });
+			this.info.set(meta.id, { agent: meta.agent, task: meta.task, model: meta.model });
 			this.lifecycle.adopt(meta.id, { reviver: (stale) => this.revive(stale) });
 			restored++;
 		}
@@ -214,6 +229,8 @@ export class AgentsHost implements AgentToolsHost {
 			sessionDir: this.options.store.ensureDir(id),
 			sessionFile: stale.sessionFile ?? undefined,
 			customTools: this.customTools(id, this.depthOf(id)),
+			model: this.info.get(id)?.model,
+			restrictModelTo: undefined,
 		});
 		this.options.store.update(id, { killed: false });
 		this.watchResults(id, session);

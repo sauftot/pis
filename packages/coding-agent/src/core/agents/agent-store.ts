@@ -12,6 +12,8 @@ export interface AgentMeta {
 	parentId: string;
 	/** The task it was spawned with, for rosters. */
 	task: string;
+	/** Model pattern it was spawned with, so a revive runs on the same model. Absent: the default. */
+	model?: string;
 	/** Absolute transcript path. Null until the agent's session exists. */
 	sessionFile: string | null;
 	createdAt: number;
@@ -33,11 +35,15 @@ export class AgentStore {
 		return this.root !== undefined;
 	}
 
-	/** Directory that holds agent `id`'s transcript, created on demand. Undefined when not persistent. */
+	/** Where agent `id`'s transcript and meta live. Nothing is created: a spawn that fails leaves no trace. */
+	dirFor(id: string): string | undefined {
+		return this.root ? join(this.root, id) : undefined;
+	}
+
+	/** {@link dirFor}, created on demand. */
 	ensureDir(id: string): string | undefined {
-		if (!this.root) return undefined;
-		const dir = join(this.root, id);
-		mkdirSync(dir, { recursive: true });
+		const dir = this.dirFor(id);
+		if (dir) mkdirSync(dir, { recursive: true });
 		return dir;
 	}
 
@@ -81,6 +87,7 @@ function parseMeta(text: string): AgentMeta | undefined {
 			agent: value.agent ?? "worker",
 			parentId: value.parentId,
 			task: value.task ?? "",
+			model: typeof value.model === "string" ? value.model : undefined,
 			sessionFile: value.sessionFile ?? null,
 			createdAt: value.createdAt ?? 0,
 			killed: value.killed ?? false,

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -51,6 +51,17 @@ describe("AgentStore", () => {
 		writeFileSync(join(root, "Bad", "meta.json"), "{not json");
 		mkdirSync(join(root, "Empty"), { recursive: true });
 		expect(store.list().map((m) => m.id)).toEqual(["Good"]);
+	});
+
+	it("reports an agent's directory without creating it, and creates it on demand", () => {
+		const root = newRoot();
+		const store = new AgentStore(root);
+		const dir = store.dirFor("Alpha");
+		expect(dir).toBe(join(root, "Alpha"));
+		expect(existsSync(dir!)).toBe(false);
+		expect(store.ensureDir("Alpha")).toBe(dir);
+		expect(existsSync(dir!)).toBe(true);
+		expect(new AgentStore(undefined).dirFor("Alpha")).toBeUndefined();
 	});
 
 	it("does nothing when the session is not persisted", () => {
