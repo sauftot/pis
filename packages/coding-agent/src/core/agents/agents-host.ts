@@ -1,7 +1,9 @@
 // The agents host: one per top-level session. It owns the registry, lifecycle and bus, spawns subagents,
 // bounds their concurrency, and delivers each finished run's result to the agent that spawned it.
 
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "../extensions/types.ts";
+import { AgentActivityLog, gist, summarizeToolArgs } from "./agent-activity.ts";
 import { AgentBus } from "./agent-bus.ts";
 import { type AgentDefinition, DEFAULT_AGENT_NAME } from "./agent-definitions.ts";
 import { AgentLifecycle } from "./agent-lifecycle.ts";
@@ -15,7 +17,14 @@ import {
 	type SpawnRequest,
 	type SpawnResult,
 } from "./agent-tools.ts";
-import type { AgentRef, AgentSessionHandle } from "./agent-types.ts";
+import type {
+	AgentEnvelope,
+	AgentRef,
+	AgentSessionHandle,
+	AgentStatus,
+	DeliveryReceipt,
+	RegistryEvent,
+} from "./agent-types.ts";
 import { Semaphore } from "./semaphore.ts";
 
 export const MAIN_AGENT_ID = "main";
@@ -70,6 +79,8 @@ export class AgentsHost implements AgentToolsHost {
 	readonly registry = new AgentRegistry();
 	readonly lifecycle: AgentLifecycle;
 	readonly bus: AgentBus;
+	/** What the agents did, for the hub's activity view. */
+	readonly activity = new AgentActivityLog();
 	private readonly options: AgentsHostOptions;
 	private readonly info = new Map<string, AgentInfo>();
 	private readonly slots: Semaphore;
@@ -82,11 +93,14 @@ export class AgentsHost implements AgentToolsHost {
 		const settings = options.settings();
 		this.slots = new Semaphore(Math.max(1, settings.maxConcurrency));
 		this.lifecycle = new AgentLifecycle(this.registry, { idleParkMs: () => this.options.settings().idleParkMs });
-		this.bus = new AgentBus(this.registry, this.lifecycle);
+		this.bus = new AgentBus(this.registry, this.lifecycle, (envelope, receipt) =>
+			this.logDelivery(envelope, receipt),
+		);
 		this.unsubscribeRegistry = this.registry.onChange((event) => {
 			if (event.type === "status_changed" && event.ref.status === "aborted") {
 				this.options.store.update(event.ref.id, { killed: true });
 			}
+			this.logRegistryEvent(event);
 		});
 	}
 
@@ -168,6 +182,11 @@ export class AgentsHost implements AgentToolsHost {
 		});
 		this.registry.setActivity(id, "waiting for a slot", ref);
 		this.info.set(id, { agent: definition.name, task: request.task, model: request.model });
+		this.activity.record({
+			agentId: id,
+			kind: "lifecycle",
+			text: `spawned by ${request.callerId} (${definition.name}${request.model ? `, model ${request.model}` : ""}): ${gist(request.task, 100)}`,
+		});
 		this.options.store.write({
 			id,
 			displayName: id,
@@ -204,6 +223,11 @@ export class AgentsHost implements AgentToolsHost {
 				createdAt: meta.createdAt,
 			});
 			this.info.set(meta.id, { agent: meta.agent, task: meta.task, model: meta.model });
+			this.activity.record({
+				agentId: meta.id,
+				kind: "lifecycle",
+				text: `restored from the saved session (${meta.killed ? "killed" : "parked"})`,
+			});
 			this.lifecycle.adopt(meta.id, { reviver: (stale) => this.revive(stale) });
 			restored++;
 		}
@@ -253,13 +277,85 @@ export class AgentsHost implements AgentToolsHost {
 		}
 	}
 
-	/** Deliver the final answer of every run this session completes to the agent that spawned it. */
+	/**
+	 * Watch a subagent's session: record its tool calls, replies and errors in the activity log, and deliver the
+	 * final answer of every run it completes to the agent that spawned it.
+	 */
 	private watchResults(id: string, session: AgentSessionHandle): void {
 		session.subscribe((event) => {
-			if (event.type !== "agent_settled" || event.aborted) return;
-			const ref = this.registry.get(id);
-			if (!ref || ref.session !== session) return;
-			void this.sendResult(ref, finalReport(session));
+			switch (event.type) {
+				case "tool_execution_start":
+					this.activity.record({
+						agentId: id,
+						kind: "tool",
+						text: `${event.toolName} ${summarizeToolArgs(event.args)}`.trim(),
+					});
+					break;
+				case "tool_execution_end":
+					if (event.isError)
+						this.activity.record({ agentId: id, kind: "error", text: `${event.toolName} failed` });
+					break;
+				case "message_end":
+					if (event.message.role === "assistant") this.logAssistantMessage(id, event.message);
+					break;
+				case "agent_settled": {
+					if (event.aborted) {
+						this.activity.record({ agentId: id, kind: "lifecycle", text: "run interrupted" });
+						break;
+					}
+					const ref = this.registry.get(id);
+					if (ref && ref.session === session) void this.sendResult(ref, finalReport(session));
+					break;
+				}
+				default:
+					break;
+			}
+		});
+	}
+
+	private logAssistantMessage(id: string, message: Extract<AgentMessage, { role: "assistant" }>): void {
+		if (message.stopReason === "error") {
+			this.activity.record({ agentId: id, kind: "error", text: gist(message.errorMessage ?? "model error") });
+			return;
+		}
+		const text = message.content
+			.filter((part) => part.type === "text")
+			.map((part) => part.text)
+			.join(" ");
+		if (gist(text)) this.activity.record({ agentId: id, kind: "response", text: gist(text) });
+	}
+
+	/** Lifecycle changes of subagents. Spawning and restoring are logged where they happen, with their details. */
+	private logRegistryEvent(event: RegistryEvent): void {
+		const ref = event.ref;
+		if (ref.kind !== "sub") return;
+		if (event.type === "removed") {
+			this.activity.record({ agentId: ref.id, kind: "lifecycle", text: "released" });
+		} else if (event.type === "status_changed") {
+			const text = statusChangeText(event.previous, ref.status);
+			if (text) this.activity.record({ agentId: ref.id, kind: "lifecycle", text });
+		}
+	}
+
+	private logDelivery(envelope: AgentEnvelope, receipt: DeliveryReceipt): void {
+		const { from, to } = envelope;
+		// The log is per subagent, so a message with no subagent at either end (main to an unknown id) has no home.
+		const involved = [to, from].find((id) => this.registry.get(id)?.kind === "sub");
+		if (involved === undefined) return;
+		if (receipt.outcome === "failed") {
+			this.activity.record({
+				agentId: involved,
+				kind: "error",
+				text: `${from} → ${to}: not delivered: ${receipt.error}`,
+			});
+			return;
+		}
+		const label = envelope.kind === "result" ? "report" : "message";
+		const revived = receipt.outcome === "revived" ? " (revived it)" : "";
+		this.activity.record({
+			agentId: involved,
+			kind: "message",
+			text: `${from} → ${to} ${label}${revived}: ${gist(envelope.body)}`,
 		});
 	}
 
@@ -287,6 +383,15 @@ export class AgentsHost implements AgentToolsHost {
 		for (const meta of this.options.store.list()) taken.add(meta.id);
 		return taken;
 	}
+}
+
+/** What a status change means for a reader of the log; undefined when it is not worth an entry. */
+function statusChangeText(previous: AgentStatus, next: AgentStatus): string | undefined {
+	if (next === "aborted") return "killed";
+	if (next === "parked") return "parked to disk";
+	if (next === "running") return previous === "idle" ? "started working" : undefined;
+	if (next === "idle") return previous === "running" ? "finished its run" : "revived";
+	return undefined;
 }
 
 function initialPrompt(id: string, request: SpawnRequest): string {

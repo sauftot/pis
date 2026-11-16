@@ -11,6 +11,7 @@ const ALT_A = "\x1ba";
 const ALT_M = "\x1bm";
 const ALT_NEXT = "\x1b.";
 const ENTER = "\r";
+const TAB = "\t";
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 const ESC = "\x1b";
 
@@ -96,7 +97,7 @@ describe("agents in the interactive UI", () => {
 	it("opens the hub with its hotkey, lists the agent and labels every control", async () => {
 		const { press, waitForScreen, screen } = await startWithScout();
 		press(ALT_A);
-		await waitForScreen("Agents 1 total");
+		await waitForScreen("Agent hub 1 agent,");
 		const out = await screen();
 		expect(out).toContain("Scout");
 		expect(out).toContain("scout the repo");
@@ -109,7 +110,7 @@ describe("agents in the interactive UI", () => {
 		const { press, type, waitForScreen, waitForNoScreen, screen } = await startWithScout();
 
 		press(ALT_A);
-		await waitForScreen("Agents 1 total");
+		await waitForScreen("Agent hub 1 agent,");
 		press(ENTER);
 		await waitForScreen("▶ viewing Scout");
 		let out = await screen();
@@ -129,7 +130,7 @@ describe("agents in the interactive UI", () => {
 		expect(out).toContain("agents ");
 		// The child's own conversation is gone from the view; only its report reached main.
 		expect(out).not.toContain('You are agent "Scout"');
-		expect(out).toContain('Agent "Scout" finished');
+		expect(out).toContain("report from Scout");
 	});
 
 	it("cycles the view with the next-agent hotkey, through main", async () => {
@@ -143,7 +144,7 @@ describe("agents in the interactive UI", () => {
 	it("messages an agent from the hub without leaving the main view", async () => {
 		const { press, type, waitForScreen, screen } = await startWithScout();
 		press(ALT_A);
-		await waitForScreen("Agents 1 total");
+		await waitForScreen("Agent hub 1 agent,");
 		press("m");
 		await waitForScreen("Message to Scout");
 		type("steer: from the hub");
@@ -154,7 +155,7 @@ describe("agents in the interactive UI", () => {
 	it("catches up when an agent is viewed in the middle of a run, and keeps streaming", async () => {
 		const { press, type, waitForScreen, screen } = await startWithScout({ tokensPerSecond: 90 });
 		press(ALT_A);
-		await waitForScreen("Agents 1 total");
+		await waitForScreen("Agent hub 1 agent,");
 		press("m");
 		await waitForScreen("Message to Scout");
 		type("long: write a lot");
@@ -174,7 +175,7 @@ describe("agents in the interactive UI", () => {
 	it("interrupts the viewed agent, not the main agent, with the interrupt key", async () => {
 		const { press, type, waitForScreen, screen, booted } = await startWithScout({ tokensPerSecond: 90 });
 		press(ALT_A);
-		await waitForScreen("Agents 1 total");
+		await waitForScreen("Agent hub 1 agent,");
 		press("m");
 		await waitForScreen("Message to Scout");
 		type("long: write a lot");
@@ -208,6 +209,10 @@ describe("agents in the interactive UI", () => {
 				["Alt+. / Alt+,", "Switch the view to the next / previous agent"],
 				["Alt+M", "Return the view to the main agent"],
 				["Escape", "While viewing an agent: interrupt its current run"],
+				["Tab", "In the hub: switch between the agent list and the activity log"],
+				["T", "In the hub: show agents as a parent/child tree or a flat list"],
+				["/", "In the hub: filter the list or the log by text"],
+				["F / S", "In the activity log: cycle what is shown / limit it to one agent"],
 				["/agents", "Same as the hub. Subcommands: focus, main, kill, revive, interrupt, msg"],
 			]) {
 				expect(all).toMatch(new RegExp(`${escapeRegExp(keys)}\\s*│\\s*${escapeRegExp(action)}`));
@@ -233,10 +238,84 @@ describe("agents in the interactive UI", () => {
 		expect(booted.runtime.session.sessionFile).toBeDefined();
 	});
 
+	it("draws a subagent's report apart from what the user typed", async () => {
+		const { waitForScreen, screen } = await startWithScout();
+		await waitForScreen("report from Scout");
+		const out = await screen();
+		expect(out).toContain("◀ report from Scout");
+		expect(out).toContain("scout ready");
+		// The envelope's own wording is replaced by the label.
+		expect(out).not.toContain('Agent "Scout" finished:');
+	});
+
+	it("draws a message from main as a message when viewing the agent that received it", async () => {
+		const { press, type, waitForScreen, screen } = await startWithScout();
+		press(ALT_A);
+		await waitForScreen("Agent hub 1 agent,");
+		press("m");
+		await waitForScreen("Message to Scout");
+		type("steer: from the hub");
+		await waitForScreen("Delivered to Scout");
+		press(ESC);
+		press(ALT_NEXT);
+		await waitForScreen("▶ viewing Scout");
+		await waitForScreen("◀ message from main");
+		expect(await screen()).toContain("steer: from the hub");
+	});
+
+	it("shows what the agents did in the activity log, and filters it", async () => {
+		const { press, type, waitForScreen, screen } = await startWithScout();
+		press(ALT_A);
+		await waitForScreen("Agent hub 1 agent,");
+		press(TAB);
+		await waitForScreen("[Activity");
+		await waitForScreen("spawned by main (worker)");
+		let out = await screen();
+		expect(out).toMatch(/Scout\s+reply\s+scout ready/);
+		expect(out).toMatch(/Scout\s+message\s+Scout → main report: scout ready/);
+		expect(out).toMatch(/Scout\s+lifecycle\s+finished its run/);
+		expect(out).toContain("Tab agent list");
+
+		press("f");
+		await waitForScreen("show errors");
+		expect(await screen()).toContain("Nothing matches the current filters.");
+		for (let i = 0; i < 5; i++) press("f");
+		await waitForScreen("show all");
+
+		press("/");
+		await waitForScreen("Filter the activity log");
+		type("report");
+		await waitForScreen('filter "report"');
+		out = await screen();
+		expect(out).toContain("Scout → main report");
+		expect(out).not.toContain("spawned by main");
+	});
+
+	it("flips the roster between tree and flat with the layout key", async () => {
+		const { press, waitForScreen } = await startWithScout();
+		press(ALT_A);
+		await waitForScreen("T flat list");
+		press("t");
+		await waitForScreen("T tree");
+		await waitForScreen("flat");
+	});
+
+	it("filters the roster from the hub", async () => {
+		const { press, type, waitForScreen, waitForNoScreen } = await startWithScout();
+		press(ALT_A);
+		await waitForScreen("Agent hub 1 agent,");
+		press("/");
+		await waitForScreen("Filter the agent list");
+		type("zzz");
+		await waitForScreen('No agents match "zzz"');
+		press(ESC);
+		await waitForNoScreen('No agents match "zzz"');
+	});
+
 	it("kills an agent from the hub and shows it as killed", async () => {
 		const { press, waitForScreen } = await startWithScout();
 		press(ALT_A);
-		await waitForScreen("Agents 1 total");
+		await waitForScreen("Agent hub 1 agent,");
 		press("x");
 		await waitForScreen("Killed Scout");
 		await waitForScreen("✕ Scout");

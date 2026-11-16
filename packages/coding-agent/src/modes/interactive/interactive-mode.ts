@@ -69,7 +69,13 @@ import {
 import { AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
-import { type AgentsHost, buildRoster, getSessionAgentsHost, MAIN_AGENT_ID } from "../../core/agents/index.ts";
+import {
+	type AgentsHost,
+	buildRoster,
+	getSessionAgentsHost,
+	MAIN_AGENT_ID,
+	parseEnvelope,
+} from "../../core/agents/index.ts";
 import {
 	CACHE_TTL_MS,
 	type CacheMiss,
@@ -148,6 +154,7 @@ import { AgentHubComponent } from "./agents/agent-hub.ts";
 import { formatAgentsLine } from "./agents/agents-line.ts";
 import { reportBug } from "./bug-report.ts";
 import { createChatViewport } from "./chat-viewport.ts";
+import { AgentMessageComponent } from "./components/agent-message.ts";
 import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
@@ -4111,6 +4118,19 @@ export class InteractiveMode {
 					if (this.chatContainer.children.length > 0) {
 						this.chatContainer.addChild(new Spacer(1));
 					}
+					// A report or message from another agent is drawn apart from what the user typed, and is not
+					// something to recall with the up arrow.
+					const envelope = parseEnvelope(textContent);
+					if (envelope) {
+						const component = new AgentMessageComponent(
+							envelope,
+							this.getMarkdownThemeWithSettings(),
+							this.outputPad,
+						);
+						component.setExpanded(this.toolOutputExpanded);
+						this.chatContainer.addChild(component);
+						break;
+					}
 					const skillBlock = parseSkillBlock(textContent);
 					if (skillBlock) {
 						// Render skill block (collapsible)
@@ -5497,6 +5517,7 @@ export class InteractiveMode {
 		this.showSelector((done) => {
 			const hub = new AgentHubComponent({
 				getRows: () => buildRoster(host.registry, (id) => host.describe(id)),
+				getActivity: () => host.activity.entries(),
 				getMainStatus: () => host.registry.get(MAIN_AGENT_ID)?.status,
 				getFocusedId: () => this.agentFocus?.focusedId,
 				now: () => Date.now(),
@@ -5509,7 +5530,15 @@ export class InteractiveMode {
 			});
 			// Ages in the roster are relative, so keep them moving while the hub is open.
 			const ticker = setInterval(() => this.ui.requestRender(), 1000);
-			return { component: hub, focus: hub, dispose: () => clearInterval(ticker) };
+			const stopWatching = host.activity.onChange(() => this.ui.requestRender());
+			return {
+				component: hub,
+				focus: hub,
+				dispose: () => {
+					clearInterval(ticker);
+					stopWatching();
+				},
+			};
 		});
 	}
 
@@ -7234,6 +7263,11 @@ export class InteractiveMode {
 		const hubKill = this.getAppKeyDisplay("app.agents.kill");
 		const hubRevive = this.getAppKeyDisplay("app.agents.revive");
 		const hubDetails = this.getAppKeyDisplay("app.agents.details");
+		const hubActivity = this.getAppKeyDisplay("app.agents.activity");
+		const hubTree = this.getAppKeyDisplay("app.agents.tree");
+		const hubFilter = this.getAppKeyDisplay("app.agents.filter");
+		const hubKind = this.getAppKeyDisplay("app.agents.kindFilter");
+		const hubScope = this.getAppKeyDisplay("app.agents.scope");
 
 		let hotkeys = `
 **Navigation**
@@ -7293,6 +7327,10 @@ export class InteractiveMode {
 | \`${hubInterrupt}\` | In the hub: interrupt the selected agent's current run |
 | \`${hubKill}\` / \`${hubRevive}\` | In the hub: kill / revive the selected agent |
 | \`${hubDetails}\` | In the hub: show or hide the selected agent's details |
+| \`${hubActivity}\` | In the hub: switch between the agent list and the activity log |
+| \`${hubTree}\` | In the hub: show agents as a parent/child tree or a flat list |
+| \`${hubFilter}\` | In the hub: filter the list or the log by text |
+| \`${hubKind}\` / \`${hubScope}\` | In the activity log: cycle what is shown / limit it to one agent |
 | \`/agents\` | Same as the hub. Subcommands: focus, main, kill, revive, interrupt, msg |
 `;
 

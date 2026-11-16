@@ -181,6 +181,11 @@ Active when `agents.enabled` is set. See [agents](../../../docs/piss/agents.md) 
 | `app.agents.kill` | `x` | In the hub: kill the selected agent. It can be revived |
 | `app.agents.revive` | `r` | In the hub: revive the selected parked or killed agent |
 | `app.agents.details` | `d` | In the hub: show or hide the selected agent's details |
+| `app.agents.activity` | `tab` | In the hub: switch between the agent list and the activity log |
+| `app.agents.tree` | `t` | In the hub: show agents as a parent/child tree or a flat list (running agents first) |
+| `app.agents.filter` | `/` | In the hub: filter the list or the log by text. `enter` keeps the filter, `escape` clears it |
+| `app.agents.kindFilter` | `f` | In the activity log: cycle what is shown: all, errors, replies, tools, messages, lifecycle |
+| `app.agents.scope` | `s` | In the activity log: show every agent, or only the one selected |
 
 While an agent is shown, `app.interrupt` (`escape`) interrupts that agent's run, not the main agent's. The hub also uses `tui.select.up`, `tui.select.down`, `tui.select.confirm` (view and steer the selected agent) and `tui.select.cancel` (close).
 

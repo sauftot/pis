@@ -1,5 +1,5 @@
-// The agent hub: a roster of every subagent with a details inspector and the keys to focus, message,
-// interrupt, kill and revive them.
+// The agent hub: a roster of every subagent and an activity log of what they did, with an inspector and the keys to
+// view, message, interrupt, kill and revive agents, filter what is listed, and switch the layout.
 
 import {
 	type Component,
@@ -9,10 +9,20 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { type AgentStatus, formatAge, type RosterRow, statusGlyph } from "../../../core/agents/index.ts";
+import {
+	ACTIVITY_KIND_FILTERS,
+	type ActivityEntry,
+	type AgentStatus,
+	filterActivity,
+	filterRoster,
+	layoutRoster,
+	type RosterLayout,
+	type RosterRow,
+	statusGlyph,
+} from "../../../core/agents/index.ts";
 import { keyDisplayText } from "../components/keybinding-hints.ts";
 import { theme } from "../theme/theme.ts";
-import { colored } from "./agents-line.ts";
+import { activityRowLines, detailLines, rosterRowLines, wrapHints } from "./agent-hub-rows.ts";
 
 export interface AgentHubActions {
 	/** Show the agent in the chat view. Rejects with a message fit to show the user. */
@@ -26,7 +36,10 @@ export interface AgentHubActions {
 }
 
 export interface AgentHubDeps {
+	/** Every subagent in tree order. */
 	getRows(): RosterRow[];
+	/** Everything the agents did, oldest first. */
+	getActivity(): readonly ActivityEntry[];
 	getMainStatus(): AgentStatus | undefined;
 	getFocusedId(): string | undefined;
 	now(): number;
@@ -34,24 +47,34 @@ export interface AgentHubDeps {
 	requestRender(): void;
 }
 
-/** Rows shown at once; longer rosters scroll with the selection. */
-const MAX_VISIBLE_ROWS = 10;
-const MAX_TASK_LINES = 3;
+type View = "agents" | "activity";
+type Mode = "list" | "message" | "filter";
+type Binding = Parameters<typeof keyDisplayText>[0];
 
 export class AgentHubComponent implements Component, Focusable {
 	private readonly deps: AgentHubDeps;
 	private readonly input = new Input({ prompt: "" });
-	private selectedId: string | undefined;
+	private view: View = "agents";
+	private mode: Mode = "list";
+	private layout: RosterLayout = "tree";
 	private detailsOpen = false;
-	private mode: "list" | "message" = "list";
 	private feedback: string | undefined;
-	private scrollTop = 0;
+	private rosterQuery = "";
+	private activityQuery = "";
+	private kindIndex = 0;
+	private scopeId: string | undefined;
+	private selectedId: string | undefined;
+	private activitySeq: number | undefined;
+	/** The activity log follows its newest entry until the selection moves up. */
+	private following = true;
+	private rosterScroll = 0;
+	private activityScroll = 0;
 	private _focused = false;
 
 	constructor(deps: AgentHubDeps) {
 		this.deps = deps;
-		this.input.onSubmit = (value) => this.sendMessage(value);
-		this.input.onEscape = () => this.leaveMessageMode();
+		this.input.onSubmit = (value) => this.handleSubmit(value);
+		this.input.onEscape = () => this.handleInputEscape();
 	}
 
 	get focused(): boolean {
@@ -60,147 +83,176 @@ export class AgentHubComponent implements Component, Focusable {
 
 	set focused(value: boolean) {
 		this._focused = value;
-		this.input.focused = value && this.mode === "message";
+		this.input.focused = value && this.mode !== "list";
 	}
 
 	invalidate(): void {}
 
 	handleInput(data: string): void {
-		if (this.mode === "message") {
+		const keys = getKeybindings();
+		if (this.mode === "filter" && (keys.matches(data, "tui.select.up") || keys.matches(data, "tui.select.down"))) {
+			this.move(keys.matches(data, "tui.select.up") ? -1 : 1);
+		} else if (this.mode !== "list") {
 			this.input.handleInput(data);
-			this.deps.requestRender();
+			if (this.mode === "filter") this.setQuery(this.input.getValue());
+		} else if (!this.handleListKey(data)) {
 			return;
 		}
-		const keys = getKeybindings();
-		const rows = this.deps.getRows();
-		const selected = this.selected(rows);
-
-		if (keys.matches(data, "tui.select.cancel")) this.deps.actions.close();
-		else if (keys.matches(data, "tui.select.up")) this.move(rows, -1);
-		else if (keys.matches(data, "tui.select.down")) this.move(rows, 1);
-		else if (keys.matches(data, "app.agents.details")) this.detailsOpen = !this.detailsOpen;
-		else if (selected && keys.matches(data, "tui.select.confirm")) this.focusSelected(selected.id);
-		else if (selected && keys.matches(data, "app.agents.message")) this.enterMessageMode();
-		else if (selected && keys.matches(data, "app.agents.interrupt"))
-			this.run(this.deps.actions.interrupt(selected.id));
-		else if (selected && keys.matches(data, "app.agents.kill")) this.run(this.deps.actions.kill(selected.id));
-		else if (selected && keys.matches(data, "app.agents.revive")) this.run(this.deps.actions.revive(selected.id));
-		else return;
 		this.deps.requestRender();
 	}
 
+	/** Returns whether the key did something. */
+	private handleListKey(data: string): boolean {
+		const keys = getKeybindings();
+		const is = (binding: Binding) => keys.matches(data, binding);
+		const agents = this.view === "agents";
+
+		if (is("tui.select.cancel")) {
+			if (this.query) this.setQuery("");
+			else this.deps.actions.close();
+		} else if (is("tui.select.up")) this.move(-1);
+		else if (is("tui.select.down")) this.move(1);
+		else if (is("app.agents.activity")) this.switchView();
+		else if (is("app.agents.filter")) this.enterFilterMode();
+		else if (is("tui.select.confirm")) this.focusSelected();
+		else if (agents && is("app.agents.tree")) this.layout = this.layout === "tree" ? "flat" : "tree";
+		else if (agents && is("app.agents.details")) this.detailsOpen = !this.detailsOpen;
+		else if (agents && is("app.agents.message")) this.enterMessageMode();
+		else if (agents && is("app.agents.interrupt")) this.act((id) => this.deps.actions.interrupt(id));
+		else if (agents && is("app.agents.kill")) this.act((id) => this.deps.actions.kill(id));
+		else if (agents && is("app.agents.revive")) this.act((id) => this.deps.actions.revive(id));
+		else if (!agents && is("app.agents.kindFilter"))
+			this.kindIndex = (this.kindIndex + 1) % ACTIVITY_KIND_FILTERS.length;
+		else if (!agents && is("app.agents.scope")) this.toggleScope();
+		else return false;
+		return true;
+	}
+
 	render(width: number): string[] {
-		const rows = this.deps.getRows();
-		const selected = this.selected(rows);
-		const lines: string[] = [theme.fg("border", "─".repeat(Math.max(1, width)))];
-
-		lines.push(this.titleLine(rows, width), "");
-		if (rows.length === 0) {
-			lines.push(
-				theme.fg("muted", " No agents yet. Ask the model to delegate work with the task tool,"),
-				theme.fg("muted", ' or enable agents with "agents.enabled": true in settings.'),
-			);
-		} else {
-			lines.push(...this.rowLines(rows, selected, width));
-		}
-
-		if (this.detailsOpen && selected) lines.push("", ...this.detailLines(selected, width));
+		const line = theme.fg("border", "─".repeat(Math.max(1, width)));
+		const lines = [line, this.titleLine(width), this.stateLine(width), ""];
+		lines.push(...(this.view === "agents" ? this.agentsBody(width) : this.activityBody(width)));
 		if (this.feedback) lines.push("", truncateToWidth(` ${this.feedback}`, width, "…"));
-		if (this.mode === "message" && selected) {
-			lines.push("", ...this.messagePromptLines(selected, width));
-		}
-		lines.push(
-			"",
-			...wrapHints(this.hints(Boolean(selected)), width),
-			theme.fg("border", "─".repeat(Math.max(1, width))),
-		);
+		if (this.mode !== "list") lines.push("", ...this.promptLines(width));
+		lines.push("", ...wrapHints(this.hints(), width), line);
 		return lines;
 	}
 
-	private titleLine(rows: readonly RosterRow[], width: number): string {
-		const running = rows.filter((row) => row.status === "running").length;
-		const title = `${theme.bold(theme.fg("accent", " Agents"))} ${theme.fg("dim", `${rows.length} total, ${running} running`)}`;
+	// ---- drawing ----------------------------------------------------------------------------------------------
+
+	private titleLine(width: number): string {
+		const all = this.deps.getRows();
+		const running = all.filter((row) => row.status === "running").length;
+		const title = `${theme.bold(theme.fg("accent", " Agent hub"))} ${theme.fg("dim", `${all.length} ${all.length === 1 ? "agent" : "agents"}, ${running} running`)}`;
 		const main = this.deps.getMainStatus();
 		const viewing = this.deps.getFocusedId();
-		const where = viewing ? `viewing ${viewing}` : "viewing main";
-		const right = theme.fg("muted", `${where}${main ? ` · main ${statusGlyph(main)} ${main}` : ""} `);
+		const right = theme.fg(
+			"muted",
+			`${viewing ? `viewing ${viewing}` : "viewing main"}${main ? ` · main ${statusGlyph(main)} ${main}` : ""} `,
+		);
 		const gap = Math.max(1, width - visibleWidth(title) - visibleWidth(right));
 		return truncateToWidth(`${title}${" ".repeat(gap)}${right}`, width, "…");
 	}
 
-	private rowLines(rows: readonly RosterRow[], selected: RosterRow | undefined, width: number): string[] {
-		const index = Math.max(
-			0,
-			rows.findIndex((row) => row.id === selected?.id),
-		);
-		if (index < this.scrollTop) this.scrollTop = index;
-		if (index >= this.scrollTop + MAX_VISIBLE_ROWS) this.scrollTop = index - MAX_VISIBLE_ROWS + 1;
-		const visible = rows.slice(this.scrollTop, this.scrollTop + MAX_VISIBLE_ROWS);
+	/** The two views as tabs, then what narrows the current one. */
+	private stateLine(width: number): string {
+		const tab = (name: string, active: boolean) =>
+			active ? theme.bold(theme.fg("accent", `[${name}]`)) : theme.fg("dim", ` ${name} `);
+		const activityCount = this.deps.getActivity().length;
+		const tabs = `${tab("Agents", this.view === "agents")} ${tab(`Activity ${activityCount}`, this.view === "activity")}`;
+		const parts =
+			this.view === "agents"
+				? [this.layout === "tree" ? "tree" : "flat", this.rosterQuery && `filter "${this.rosterQuery}"`]
+				: [
+						`show ${ACTIVITY_KIND_FILTERS[this.kindIndex]}`,
+						`agents: ${this.scopeId ?? "all"}`,
+						this.activityQuery && `filter "${this.activityQuery}"`,
+						this.following ? "following" : "paused",
+					];
+		const state = theme.fg("muted", parts.filter(Boolean).join(" · "));
+		return truncateToWidth(` ${tabs}  ${theme.fg("dim", "│")}  ${state}`, width, "…");
+	}
 
-		const idWidth = Math.min(22, Math.max(...rows.map((row) => row.depth * 2 + row.id.length)));
-		const typeWidth = Math.min(10, Math.max(...rows.map((row) => (row.agent ?? "").length)));
-		const now = this.deps.now();
-		const lines = visible.map((row) => {
-			const isSelected = row.id === selected?.id;
-			const name = `${"  ".repeat(row.depth)}${row.id}`;
-			const pointer = isSelected ? theme.fg("accent", "▸") : " ";
-			const text = row.activity ?? row.task ?? "";
-			const cells = [
-				pointer,
-				colored(row.status, statusGlyph(row.status)),
-				isSelected ? theme.bold(theme.fg("accent", pad(name, idWidth))) : pad(name, idWidth),
-				theme.fg("dim", pad(row.agent ?? "", typeWidth)),
-				colored(row.status, pad(row.status, 7)),
-				theme.fg("dim", pad(formatAge(now - row.lastActivity), 4, "right")),
-				row.activity ? theme.fg("warning", oneLine(text)) : theme.fg("muted", oneLine(text)),
-			];
-			const line = ` ${cells.join(" ")}`;
-			return truncateToWidth(
-				row.id === this.deps.getFocusedId() ? `${line} ${theme.fg("accent", "◀ viewing")}` : line,
-				width,
-				"…",
-			);
+	private agentsBody(width: number): string[] {
+		const total = this.deps.getRows().length;
+		const rows = this.rosterRows();
+		const selected = this.selectedRow(rows);
+		if (rows.length === 0) {
+			return total === 0
+				? [
+						theme.fg("muted", " No agents yet. Ask the model to delegate work with the task tool,"),
+						theme.fg("muted", ' or enable agents with "agents.enabled": true in settings.'),
+					]
+				: [theme.fg("muted", ` No agents match "${this.rosterQuery}".`)];
+		}
+		const list = rosterRowLines({
+			rows,
+			selectedId: selected?.id,
+			focusedId: this.deps.getFocusedId(),
+			now: this.deps.now(),
+			width,
+			scrollTop: this.rosterScroll,
 		});
-		const hiddenAbove = this.scrollTop;
-		const hiddenBelow = rows.length - this.scrollTop - visible.length;
-		if (hiddenAbove > 0) lines.unshift(theme.fg("dim", ` ↑ ${hiddenAbove} more`));
-		if (hiddenBelow > 0) lines.push(theme.fg("dim", ` ↓ ${hiddenBelow} more`));
+		this.rosterScroll = list.scrollTop;
+		const lines = list.lines;
+		if (this.detailsOpen && selected) lines.push("", ...detailLines(selected, this.deps.now(), width));
 		return lines;
 	}
 
-	private detailLines(row: RosterRow, width: number): string[] {
-		const label = (name: string) => theme.fg("dim", `${name.padEnd(11)}`);
-		const lines = [
-			` ${theme.bold(row.id)} ${theme.fg("dim", `· ${row.agent ?? "agent"} · ${row.status}`)}`,
-			...wrapPlain(row.task ?? "(no task recorded)", Math.max(10, width - 14), MAX_TASK_LINES).map(
-				(text, i) => ` ${i === 0 ? label("task") : label("")}${text}`,
-			),
-			` ${label("doing")}${row.activity ?? (row.status === "running" ? "thinking" : "nothing right now")}`,
-			` ${label("parent")}${row.parentId ?? "main"}`,
-			` ${label("started")}${formatAge(this.deps.now() - row.createdAt)} ago`,
-			` ${label("transcript")}${row.sessionFile ?? "not saved (session is not persisted)"}`,
-		];
-		return lines.map((line) => truncateToWidth(line, width, "…"));
+	private activityBody(width: number): string[] {
+		const entries = this.activityEntries();
+		if (entries.length === 0) {
+			const empty =
+				this.deps.getActivity().length === 0 ? " No activity yet." : " Nothing matches the current filters.";
+			return [theme.fg("muted", empty)];
+		}
+		const selected = this.selectedEntry(entries);
+		const list = activityRowLines({ entries, selectedSeq: selected?.seq, width, scrollTop: this.activityScroll });
+		this.activityScroll = list.scrollTop;
+		return list.lines;
 	}
 
-	private messagePromptLines(row: RosterRow, width: number): string[] {
-		const prompt = ` ${theme.fg("accent", `Message to ${row.id}`)} ${theme.fg("dim", `(${keyDisplayText("tui.select.confirm")} send, ${keyDisplayText("tui.select.cancel")} cancel)`)}`;
-		return [
-			truncateToWidth(prompt, width, "…"),
-			...this.input.render(Math.max(1, width - 2)).map((line) => ` ${line}`),
-		];
+	private promptLines(width: number): string[] {
+		const field = this.input.render(Math.max(1, width - 2)).map((line) => ` ${line}`);
+		if (this.mode === "filter") {
+			const title = ` ${theme.fg("accent", `Filter the ${this.view === "agents" ? "agent list" : "activity log"}`)} ${theme.fg("dim", `(${keyDisplayText("tui.select.confirm")} keep, ${keyDisplayText("tui.select.cancel")} clear)`)}`;
+			return [truncateToWidth(title, width, "…"), ...field];
+		}
+		const target = this.selectedId ?? "";
+		const title = ` ${theme.fg("accent", `Message to ${target}`)} ${theme.fg("dim", `(${keyDisplayText("tui.select.confirm")} send, ${keyDisplayText("tui.select.cancel")} cancel)`)}`;
+		return [truncateToWidth(title, width, "…"), ...field];
 	}
 
-	private hints(hasSelection: boolean): string[] {
-		if (this.mode === "message") return [];
-		const key = (binding: Parameters<typeof keyDisplayText>[0], label: string) => {
+	/** Every control that works right now, labelled with its key. */
+	private hints(): string[] {
+		const key = (binding: Binding, label: string) => {
 			const keys = keyDisplayText(binding);
 			return keys ? `${theme.fg("accent", keys)} ${theme.fg("muted", label)}` : "";
 		};
+		if (this.mode === "message") return [];
 		const move = [keyDisplayText("tui.select.up"), keyDisplayText("tui.select.down")].filter(Boolean).join("/");
+		const select = move ? `${theme.fg("accent", move)} ${theme.fg("muted", "select")}` : "";
+		if (this.mode === "filter")
+			return [select, key("tui.select.confirm", "keep filter"), key("tui.select.cancel", "clear filter")].filter(
+				Boolean,
+			);
+
+		const closeOrClear = key("tui.select.cancel", this.query ? "clear filter" : "close");
+		if (this.view === "activity") {
+			return [
+				select,
+				key("tui.select.confirm", "view that agent"),
+				key("app.agents.kindFilter", `show: ${this.nextKind()}`),
+				key("app.agents.scope", this.scopeId ? "all agents" : "this agent only"),
+				key("app.agents.filter", "filter"),
+				key("app.agents.activity", "agent list"),
+				closeOrClear,
+			].filter(Boolean);
+		}
+		const hasRows = this.rosterRows().length > 0;
 		return [
-			move ? `${theme.fg("accent", move)} ${theme.fg("muted", "select")}` : "",
-			...(hasSelection
+			select,
+			...(hasRows
 				? [
 						key("tui.select.confirm", "view & steer"),
 						key("app.agents.message", "message"),
@@ -210,28 +262,149 @@ export class AgentHubComponent implements Component, Focusable {
 						key("app.agents.details", "details"),
 					]
 				: []),
-			key("tui.select.cancel", "close"),
+			key("app.agents.tree", this.layout === "tree" ? "flat list" : "tree"),
+			key("app.agents.filter", "filter"),
+			key("app.agents.activity", "activity log"),
+			closeOrClear,
 		].filter(Boolean);
 	}
 
-	private selected(rows: readonly RosterRow[]): RosterRow | undefined {
+	// ---- data and selection -----------------------------------------------------------------------------------
+
+	private get query(): string {
+		return this.view === "agents" ? this.rosterQuery : this.activityQuery;
+	}
+
+	private setQuery(value: string): void {
+		if (this.view === "agents") this.rosterQuery = value;
+		else this.activityQuery = value;
+		this.feedback = undefined;
+	}
+
+	private rosterRows(): RosterRow[] {
+		return filterRoster(layoutRoster(this.deps.getRows(), this.layout), this.rosterQuery);
+	}
+
+	private activityEntries(): ActivityEntry[] {
+		return filterActivity(this.deps.getActivity(), {
+			kind: ACTIVITY_KIND_FILTERS[this.kindIndex]!,
+			agentId: this.scopeId,
+			query: this.activityQuery,
+		});
+	}
+
+	private nextKind(): string {
+		return ACTIVITY_KIND_FILTERS[(this.kindIndex + 1) % ACTIVITY_KIND_FILTERS.length]!;
+	}
+
+	private selectedRow(rows: readonly RosterRow[]): RosterRow | undefined {
 		const current = rows.find((row) => row.id === this.selectedId);
 		if (current) return current;
 		this.selectedId = rows[0]?.id;
 		return rows[0];
 	}
 
-	private move(rows: readonly RosterRow[], delta: -1 | 1): void {
-		if (rows.length === 0) return;
-		const at = Math.max(
-			0,
-			rows.findIndex((row) => row.id === this.selectedId),
-		);
-		this.selectedId = rows[(at + delta + rows.length) % rows.length]?.id;
+	private selectedEntry(entries: readonly ActivityEntry[]): ActivityEntry | undefined {
+		const last = entries.at(-1);
+		if (!last) return undefined;
+		if (this.following) {
+			this.activitySeq = last.seq;
+			return last;
+		}
+		const current = entries.find((entry) => entry.seq === this.activitySeq);
+		if (current) return current;
+		this.following = true;
+		this.activitySeq = last.seq;
+		return last;
+	}
+
+	private move(delta: -1 | 1): void {
+		this.feedback = undefined;
+		if (this.view === "agents") {
+			const rows = this.rosterRows();
+			if (rows.length === 0) return;
+			const at = Math.max(
+				0,
+				rows.findIndex((row) => row.id === this.selectedId),
+			);
+			this.selectedId = rows[(at + delta + rows.length) % rows.length]?.id;
+			return;
+		}
+		const entries = this.activityEntries();
+		const current = this.selectedEntry(entries);
+		if (!current) return;
+		const at = entries.findIndex((entry) => entry.seq === current.seq);
+		const next = entries[Math.min(entries.length - 1, Math.max(0, at + delta))]!;
+		this.activitySeq = next.seq;
+		// Moving off the newest entry pauses following; coming back to it resumes.
+		this.following = next.seq === entries.at(-1)?.seq;
+	}
+
+	private switchView(): void {
+		this.view = this.view === "agents" ? "activity" : "agents";
 		this.feedback = undefined;
 	}
 
-	private focusSelected(id: string): void {
+	/** Limit the log to one agent: the one whose entry is selected, else the selected one in the list. */
+	private toggleScope(): void {
+		if (this.scopeId) {
+			this.scopeId = undefined;
+			return;
+		}
+		this.scopeId = this.selectedEntry(this.activityEntries())?.agentId ?? this.selectedId;
+	}
+
+	// ---- modes and actions ------------------------------------------------------------------------------------
+
+	private enterFilterMode(): void {
+		this.mode = "filter";
+		this.input.setValue(this.query);
+		this.input.focused = this._focused;
+		this.feedback = undefined;
+	}
+
+	private enterMessageMode(): void {
+		if (this.rosterRows().length === 0) return;
+		this.mode = "message";
+		this.input.setValue("");
+		this.input.focused = this._focused;
+		this.feedback = undefined;
+	}
+
+	private leaveInputMode(): void {
+		this.mode = "list";
+		this.input.focused = false;
+		this.deps.requestRender();
+	}
+
+	private handleSubmit(value: string): void {
+		if (this.mode === "filter") {
+			this.leaveInputMode();
+			return;
+		}
+		const target = this.selectedId;
+		this.leaveInputMode();
+		if (!target || !value.trim()) return;
+		this.run(this.deps.actions.message(target, value.trim()));
+	}
+
+	private handleInputEscape(): void {
+		if (this.mode === "filter") this.setQuery("");
+		this.leaveInputMode();
+	}
+
+	/** Run an action on the agent selected in the roster. */
+	private act(action: (id: string) => Promise<string>): void {
+		const row = this.selectedRow(this.rosterRows());
+		if (row) this.run(action(row.id));
+	}
+
+	private focusSelected(): void {
+		const id =
+			this.view === "agents"
+				? this.selectedRow(this.rosterRows())?.id
+				: this.selectedEntry(this.activityEntries())?.agentId;
+		if (!id) return;
 		this.deps.actions.focus(id).then(
 			() => this.deps.actions.close(),
 			(error: unknown) => {
@@ -242,26 +415,6 @@ export class AgentHubComponent implements Component, Focusable {
 				this.deps.requestRender();
 			},
 		);
-	}
-
-	private enterMessageMode(): void {
-		this.mode = "message";
-		this.input.setValue("");
-		this.input.focused = this._focused;
-		this.feedback = undefined;
-	}
-
-	private leaveMessageMode(): void {
-		this.mode = "list";
-		this.input.focused = false;
-		this.deps.requestRender();
-	}
-
-	private sendMessage(text: string): void {
-		const target = this.selectedId;
-		this.leaveMessageMode();
-		if (!target || !text.trim()) return;
-		this.run(this.deps.actions.message(target, text.trim()));
 	}
 
 	/** Show an action's outcome (or its failure) as the feedback line. */
@@ -278,48 +431,4 @@ export class AgentHubComponent implements Component, Focusable {
 			)
 			.finally(() => this.deps.requestRender());
 	}
-}
-
-function pad(text: string, width: number, align: "left" | "right" = "left"): string {
-	const clipped = visibleWidth(text) > width ? truncateToWidth(text, width, "…") : text;
-	const fill = " ".repeat(Math.max(0, width - visibleWidth(clipped)));
-	return align === "left" ? `${clipped}${fill}` : `${fill}${clipped}`;
-}
-
-function oneLine(text: string): string {
-	return text.replace(/\s+/g, " ").trim();
-}
-
-/** Greedy word wrap of plain text, capped at `maxLines` with a trailing ellipsis. */
-function wrapPlain(text: string, width: number, maxLines: number): string[] {
-	const lines: string[] = [];
-	let current = "";
-	for (const word of oneLine(text).split(" ")) {
-		if (current && current.length + 1 + word.length > width) {
-			lines.push(current);
-			current = word;
-		} else {
-			current = current ? `${current} ${word}` : word;
-		}
-	}
-	if (current) lines.push(current);
-	if (lines.length <= maxLines) return lines;
-	return [...lines.slice(0, maxLines - 1), `${lines[maxLines - 1]?.slice(0, Math.max(0, width - 1))}…`];
-}
-
-/** Join hints with two spaces, starting a new line when the next one would overflow. */
-function wrapHints(hints: readonly string[], width: number): string[] {
-	const lines: string[] = [];
-	let current = "";
-	for (const hint of hints) {
-		const next = current ? `${current}  ${hint}` : ` ${hint}`;
-		if (current && visibleWidth(next) > width) {
-			lines.push(current);
-			current = ` ${hint}`;
-		} else {
-			current = next;
-		}
-	}
-	if (current) lines.push(current);
-	return lines;
 }

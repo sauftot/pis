@@ -40,7 +40,20 @@ Inside the hub:
 | `X` | **Kill** it. It can be revived |
 | `R` | **Revive** a parked or killed agent from its transcript |
 | `D` | Show or hide **details**: task, current tool, parent, start time, transcript path |
-| `Esc` | Close the hub |
+| `T` | Show agents as a **tree** (parents and their children) or a **flat** list with running agents first |
+| `/` | **Filter** the list or the log by text. `Enter` keeps the filter, `Esc` clears it |
+| `Tab` | Switch between the **agent list** and the **activity log** |
+| `Esc` | Clear the filter if one is set, otherwise close the hub |
+
+In the activity log:
+
+| Key | Action |
+|---|---|
+| `Up` / `Down` | Move through the log. Moving up pauses following; reaching the newest entry resumes it |
+| `Enter` | **View that agent** |
+| `F` | Cycle what is shown: all, errors, replies, tools, messages, lifecycle |
+| `S` | Show every agent, or only the agent of the selected entry |
+| `/` | Filter by text (matches the agent and the entry) |
 
 ## What you see
 
@@ -57,6 +70,32 @@ While you view an agent, the editor border changes colour and the line becomes a
 ```
 ▶ viewing Scout (running) — what you type steers this agent  │  Alt+M back to main  Alt+A agent hub  Escape interrupt
 ```
+
+## The activity log
+
+Press `Tab` in the hub. It lists, newest last, what the agents did:
+
+```
+14:03:01 Scout  lifecycle  spawned by main (worker, model haiku): find the auth flow
+14:03:04 Scout  tool       grep auth
+14:03:09 Scout  reply      found the validation in src/auth/token.ts
+14:03:09 Scout  lifecycle  finished its run
+14:03:09 Scout  message    Scout → main report: found the validation in src/auth/token.ts
+14:03:20 Scout  error      bash failed
+```
+
+It is the quickest way to see which agent is stuck or failing without opening each transcript. The log holds the last 500 entries of the session and is not saved across a restart; the agents' transcripts are.
+
+## Reports and messages in the chat
+
+A subagent's report, and a message sent by another agent, are drawn apart from what you typed:
+
+```
+◀ report from Scout
+  found the validation in src/auth/token.ts ...
+```
+
+Long reports collapse after 12 lines; `Ctrl+O` expands them, like tool output. They are still ordinary user messages in the transcript, so the model sees the same text as before.
 
 ## A typical session
 
@@ -133,4 +172,5 @@ You are a scout. Investigate quickly and report findings another agent can use.
 - Aborting the main agent does not stop its subagents. Kill them, or close the session.
 - Subagents run without extensions, skills and MCP tools.
 - With `--no-session` agents live in memory only and are never parked, so they cannot be revived after a kill.
+- The activity log is in memory only.
 - Design and internals: [agent-hub-spec.md](./agent-hub-spec.md).

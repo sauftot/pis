@@ -1,6 +1,6 @@
 import { setKeybindings } from "@earendil-works/pi-tui";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RosterRow } from "../../../src/core/agents/index.ts";
+import type { ActivityEntry, RosterRow } from "../../../src/core/agents/index.ts";
 import { KeybindingsManager } from "../../../src/core/keybindings.ts";
 import { type AgentHubActions, AgentHubComponent } from "../../../src/modes/interactive/agents/agent-hub.ts";
 import { formatAgentsLine } from "../../../src/modes/interactive/agents/agents-line.ts";
@@ -34,8 +34,9 @@ beforeEach(() => {
 	setKeybindings(new KeybindingsManager());
 });
 
-function setup(initial: RosterRow[], options: { focusedId?: string } = {}) {
+function setup(initial: RosterRow[], options: { focusedId?: string; activity?: ActivityEntry[] } = {}) {
 	let rows = initial;
+	let activity = options.activity ?? [];
 	const calls: string[] = [];
 	const renders = vi.fn();
 	/** Record the call, then answer with the outcome line the real action would. */
@@ -57,6 +58,7 @@ function setup(initial: RosterRow[], options: { focusedId?: string } = {}) {
 	};
 	const hub = new AgentHubComponent({
 		getRows: () => rows,
+		getActivity: () => activity,
 		getMainStatus: () => "idle",
 		getFocusedId: () => options.focusedId,
 		now: () => NOW,
@@ -69,7 +71,10 @@ function setup(initial: RosterRow[], options: { focusedId?: string } = {}) {
 	const setRows = (next: RosterRow[]) => {
 		rows = next;
 	};
-	return { hub, calls, actions, text, settle, setRows };
+	const setActivity = (next: ActivityEntry[]) => {
+		activity = next;
+	};
+	return { hub, calls, actions, text, settle, setRows, setActivity };
 }
 
 describe("AgentHubComponent", () => {
@@ -80,7 +85,7 @@ describe("AgentHubComponent", () => {
 				row("Wren", { status: "parked", lastActivity: NOW - 7 * 60_000 }),
 			]);
 			const out = text();
-			expect(out).toContain("Agents 2 total, 1 running");
+			expect(out).toContain("Agent hub 2 agents, 1 running");
 			expect(out).toMatch(/● Scout\s+scout\s+running\s+now\s+grep/);
 			expect(out).toMatch(/◌ Wren\s+worker\s+parked\s+7m\s+task of Wren/);
 		});
@@ -116,6 +121,9 @@ describe("AgentHubComponent", () => {
 				"X kill",
 				"R revive",
 				"D details",
+				"T flat list",
+				"/ filter",
+				"Tab activity log",
 				"Escape/Ctrl+C close",
 			]) {
 				expect(out).toContain(label);

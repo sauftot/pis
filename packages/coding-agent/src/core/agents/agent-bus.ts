@@ -1,21 +1,33 @@
 // Addressed messaging between agents: resolve the recipient, revive it if needed, and deliver without waiting for a reply.
 
 import type { PromptDisposition } from "../agent-session.ts";
+import { formatEnvelope } from "./agent-envelope.ts";
 import type { AgentLifecycle } from "./agent-lifecycle.ts";
 import type { AgentRegistry } from "./agent-registry.ts";
 import type { AgentEnvelope, AgentSessionHandle, DeliveryMode, DeliveryReceipt } from "./agent-types.ts";
 
+/** Told about every message the bus handled, delivered or not, for activity logs. */
+export type DeliveryListener = (envelope: AgentEnvelope, receipt: DeliveryReceipt) => void;
+
 export class AgentBus {
 	private readonly registry: AgentRegistry;
 	private readonly lifecycle: AgentLifecycle;
+	private readonly onDelivery: DeliveryListener | undefined;
 
-	constructor(registry: AgentRegistry, lifecycle: AgentLifecycle) {
+	constructor(registry: AgentRegistry, lifecycle: AgentLifecycle, onDelivery?: DeliveryListener) {
 		this.registry = registry;
 		this.lifecycle = lifecycle;
+		this.onDelivery = onDelivery;
 	}
 
 	/** Deliver one message. Resolves once the recipient has accepted it, not when it has answered. */
 	async send(envelope: AgentEnvelope): Promise<DeliveryReceipt> {
+		const receipt = await this.deliver(envelope);
+		this.onDelivery?.(envelope, receipt);
+		return receipt;
+	}
+
+	private async deliver(envelope: AgentEnvelope): Promise<DeliveryReceipt> {
 		const { from, to, body } = envelope;
 		if (!to) return failed(to, "A recipient is required.");
 		if (!body.trim()) return failed(to, "A non-empty message is required.");
@@ -57,7 +69,7 @@ export async function deliverAgentMessage(session: AgentSessionHandle, envelope:
 	const streamingBehavior = envelope.interrupt === false ? "followUp" : "steer";
 	return new Promise<DeliveryMode>((resolve, reject) => {
 		let accepted = false;
-		const run = session.prompt(formatAgentMessage(envelope), {
+		const run = session.prompt(formatEnvelope(envelope), {
 			source: "extension",
 			// The body is agent-authored, so it must never run as an extension command or expand as a template.
 			expandPromptTemplates: false,
@@ -75,11 +87,6 @@ export async function deliverAgentMessage(session: AgentSessionHandle, envelope:
 			if (!accepted) reject(error instanceof Error ? error : new Error(String(error)));
 		});
 	});
-}
-
-function formatAgentMessage(envelope: AgentEnvelope): string {
-	if (envelope.kind === "result") return `Agent "${envelope.from}" finished:\n\n${envelope.body}`;
-	return `Message from agent "${envelope.from}":\n\n${envelope.body}`;
 }
 
 function failed(to: string, error: string): DeliveryReceipt {

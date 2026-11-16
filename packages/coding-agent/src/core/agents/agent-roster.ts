@@ -77,3 +77,27 @@ export function formatAge(ms: number): string {
 	const hours = Math.floor(minutes / 60);
 	return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
 }
+
+export type RosterLayout = "tree" | "flat";
+
+/**
+ * Arrange rows for display. `tree` keeps the parent/child order of {@link buildRoster}. `flat` ignores lineage and
+ * puts what needs attention first: running agents, then idle, parked and killed, most recently active first.
+ */
+export function layoutRoster(rows: readonly RosterRow[], layout: RosterLayout): RosterRow[] {
+	if (layout === "tree") return [...rows];
+	const rank: Record<AgentStatus, number> = { running: 0, idle: 1, parked: 2, aborted: 3 };
+	return rows
+		.map((row) => ({ ...row, depth: 0 }))
+		.sort((a, b) => rank[a.status] - rank[b.status] || b.lastActivity - a.lastActivity || (a.id < b.id ? -1 : 1));
+}
+
+/** Rows matching every word of `query` in their id, type, task, status or current activity. A blank query matches all. */
+export function filterRoster(rows: readonly RosterRow[], query: string): RosterRow[] {
+	const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+	if (words.length === 0) return [...rows];
+	return rows.filter((row) => {
+		const haystack = [row.id, row.agent, row.task, row.status, row.activity].join(" ").toLowerCase();
+		return words.every((word) => haystack.includes(word));
+	});
+}

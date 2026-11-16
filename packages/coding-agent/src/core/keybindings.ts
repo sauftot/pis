@@ -88,6 +88,20 @@ const APP_KEYBINDINGS = {
 	"app.agents.kill": { defaultKeys: "x", description: "Agent hub: kill the selected agent" },
 	"app.agents.revive": { defaultKeys: "r", description: "Agent hub: revive the selected agent" },
 	"app.agents.details": { defaultKeys: "d", description: "Agent hub: show or hide the selected agent's details" },
+	"app.agents.activity": {
+		defaultKeys: "tab",
+		description: "Agent hub: switch between the agent list and the activity log",
+	},
+	"app.agents.tree": { defaultKeys: "t", description: "Agent hub: show agents as a parent/child tree or a flat list" },
+	"app.agents.filter": { defaultKeys: "/", description: "Agent hub: filter the list or log by text" },
+	"app.agents.kindFilter": {
+		defaultKeys: "f",
+		description: "Agent hub activity log: cycle what is shown (all, errors, responses, tools, messages, lifecycle)",
+	},
+	"app.agents.scope": {
+		defaultKeys: "s",
+		description: "Agent hub activity log: show every agent or only the one selected",
+	},
 	"app.session.new": { defaultKeys: [], description: "Start a new session" },
 	"app.session.tree": { defaultKeys: [], description: "Open session tree" },
 	"app.session.fork": { defaultKeys: [], description: "Fork current session" },

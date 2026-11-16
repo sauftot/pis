@@ -206,6 +206,97 @@ describe("AgentsHost", () => {
 		});
 	});
 
+	describe("activity log", () => {
+		const texts = (host: AgentsHost, kind: string) =>
+			host.activity
+				.entries()
+				.filter((e) => e.kind === kind)
+				.map((e) => `${e.agentId}: ${e.text}`);
+
+		it("records a spawn with who spawned it, its type, model and task", async () => {
+			const { host, spawn } = setup();
+			await spawn("Alpha", { task: "inspect the auth flow", model: "haiku" });
+			expect(texts(host, "lifecycle")[0]).toBe(
+				"Alpha: spawned by main (worker, model haiku): inspect the auth flow",
+			);
+		});
+
+		it("records tool calls with their most telling argument, and failed tools as errors", async () => {
+			const { host, children, spawn } = setup({ holds: ["Alpha"] });
+			await spawn("Alpha");
+			const child = children.get("Alpha")!;
+			child.emit({ type: "tool_execution_start", toolCallId: "1", toolName: "grep", args: { pattern: "TODO" } });
+			child.emit({ type: "tool_execution_end", toolCallId: "1", toolName: "grep", result: {}, isError: true });
+			expect(texts(host, "tool")).toEqual(["Alpha: grep TODO"]);
+			expect(texts(host, "error")).toEqual(["Alpha: grep failed"]);
+		});
+
+		it("records replies by their text, skips empty ones, and records model errors", async () => {
+			const { host, children, spawn } = setup({ holds: ["Alpha"] });
+			await spawn("Alpha");
+			const child = children.get("Alpha")!;
+			child.emit({ type: "message_end", message: fauxAssistantMessage("  found   it\n here ") });
+			child.emit({ type: "message_end", message: fauxAssistantMessage("") });
+			child.emit({
+				type: "message_end",
+				message: fauxAssistantMessage("", { stopReason: "error", errorMessage: "rate limited" }),
+			});
+			expect(texts(host, "response")).toEqual(["Alpha: found it here"]);
+			expect(texts(host, "error")).toEqual(["Alpha: rate limited"]);
+		});
+
+		it("records the lifecycle: finished, parked, revived, killed and interrupted", async () => {
+			const { host, children, spawn } = setup();
+			await spawn("Alpha");
+			host.lifecycle.park("Alpha");
+			await host.lifecycle.ensureLive("Alpha");
+			children.get("Alpha")!.emit({ type: "agent_settled", aborted: true });
+			await host.lifecycle.kill("Alpha");
+			expect(texts(host, "lifecycle").slice(1)).toEqual([
+				"Alpha: finished its run",
+				"Alpha: parked to disk",
+				"Alpha: revived",
+				"Alpha: run interrupted",
+				"Alpha: killed",
+			]);
+		});
+
+		it("never logs the main agent's own status changes", async () => {
+			const { host, main, spawn } = setup();
+			await spawn("Alpha");
+			main.emit({ type: "agent_start" });
+			main.emit({ type: "agent_settled", aborted: false });
+			expect(host.activity.entries().every((e) => e.agentId === "Alpha")).toBe(true);
+		});
+
+		it("records messages and reports against the subagent at either end, and failures as errors", async () => {
+			const { host, main, spawn } = setup();
+			await spawn("Alpha");
+			await vi.waitFor(() => expect(main.accepted).toHaveLength(1));
+			await host.bus.send({ from: "main", to: "Alpha", body: "check   the\ntests" });
+			await host.bus.send({ from: "main", to: "ghost", body: "hi" });
+			// The message starts another run, whose report is logged too.
+			await vi.waitFor(() => expect(main.accepted).toHaveLength(2));
+
+			expect(texts(host, "message")).toEqual([
+				"Alpha: Alpha → main report: report 1",
+				"Alpha: main → Alpha message: check the tests",
+				"Alpha: Alpha → main report: report 2",
+			]);
+			// A message to an unknown id has no subagent to file it under.
+			expect(texts(host, "error")).toEqual([]);
+		});
+
+		it("files a report the parent could not take under the subagent, as an error, once per attempt", async () => {
+			const { host, main, spawn } = setup({ mainRefusals: 100 });
+			await spawn("Alpha");
+			await vi.waitFor(() => expect(main.attempts).toHaveLength(4));
+			const errors = texts(host, "error");
+			expect(errors).toHaveLength(4);
+			expect(errors[0]).toContain("Alpha: Alpha → main: not delivered: Cannot submit a prompt");
+		});
+	});
+
 	describe("model choice", () => {
 		it("passes a per-call model to the child and reports it", async () => {
 			const { requests, spawn } = setup();

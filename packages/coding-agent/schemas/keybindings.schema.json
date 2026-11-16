@@ -299,6 +299,26 @@
       "$ref": "#/$defs/KeybindingValue",
       "description": "Agent hub: show or hide the selected agent's details"
     },
+    "app.agents.activity": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Agent hub: switch between the agent list and the activity log"
+    },
+    "app.agents.tree": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Agent hub: show agents as a parent/child tree or a flat list"
+    },
+    "app.agents.filter": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Agent hub: filter the list or log by text"
+    },
+    "app.agents.kindFilter": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Agent hub activity log: cycle what is shown (all, errors, responses, tools, messages, lifecycle)"
+    },
+    "app.agents.scope": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Agent hub activity log: show every agent or only the one selected"
+    },
     "app.session.new": {
       "$ref": "#/$defs/KeybindingValue",
       "description": "Start a new session"

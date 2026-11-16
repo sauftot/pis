@@ -1,11 +1,30 @@
 // Public surface of the piss agent layer.
 
+export {
+	ACTIVITY_KIND_FILTERS,
+	type ActivityEntry,
+	type ActivityKind,
+	type ActivityKindFilter,
+	AgentActivityLog,
+	filterActivity,
+	gist,
+	summarizeToolArgs,
+} from "./agent-activity.ts";
 export { AgentBus, deliverAgentMessage } from "./agent-bus.ts";
 export { type AgentDefinition, DEFAULT_AGENT_NAME, discoverAgentDefinitions } from "./agent-definitions.ts";
+export { formatEnvelope, type ParsedEnvelope, parseEnvelope } from "./agent-envelope.ts";
 export { type AdoptOptions, AgentLifecycle, type AgentLifecycleOptions, type AgentReviver } from "./agent-lifecycle.ts";
 export { allocateAgentId } from "./agent-names.ts";
 export { AgentRegistry } from "./agent-registry.ts";
-export { buildRoster, formatAge, type RosterRow, statusGlyph } from "./agent-roster.ts";
+export {
+	buildRoster,
+	filterRoster,
+	formatAge,
+	layoutRoster,
+	type RosterLayout,
+	type RosterRow,
+	statusGlyph,
+} from "./agent-roster.ts";
 export { type AgentMeta, AgentStore } from "./agent-store.ts";
 export { createMessageAgentTool, createTaskTool } from "./agent-tools.ts";
 export type {

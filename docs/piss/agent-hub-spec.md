@@ -2,7 +2,7 @@
 
 piss is a fork of pi (`earendil-works/pi`, coding-agent 1.5.x). Goal: manage subagents from inside the chat the way omp (`can1357/oh-my-pi`) does: see them, read them, steer them, kill and revive them, without leaving the session.
 
-Status: phases 1, 2 and 3 implemented (core in `packages/coding-agent/src/core/agents/`, UI in `src/modes/interactive/agents/`; 200 tests in `test/suite/agents/`, including the real InteractiveMode driven on a virtual terminal). Enable with `agents.enabled`. User guide: [agents.md](./agents.md). Phases 4-6 not started; the hub of phase 4 is partly delivered early (see 7c).
+Status: phases 1, 2 and 3 implemented (core in `packages/coding-agent/src/core/agents/`, UI in `src/modes/interactive/agents/`; 252 tests in `test/suite/agents/`, including the real InteractiveMode driven on a virtual terminal). Enable with `agents.enabled`. User guide: [agents.md](./agents.md). Phase 4 (activity log, tree/flat, filter, report renderer) is done; phases 5-6 not started.
 
 ## 1. Problem
 
@@ -194,7 +194,7 @@ Then port `examples/extensions/subagent` to use it (child steerable, listed in H
 | 1 (done) | Registry + lifecycle + bus, headless. `AgentSession.deliverAgentMessage`. Unit tests with faux provider harness (`test/suite/harness.ts`): steer running, prompt idle, revive parked, failed unknown, broadcast rules, stale-generation guard | tests pass |
 | 2 (done) | `task` tool + `message_agent` tool, persistence under `agents/`, result delivery to parent, concurrency/depth limits | model can spawn 2 agents, message one mid-run, parent gets both results |
 | 3 (done) | Focus controller + `/agents` roster (no overlay yet) + footer indicator | user focuses a running child, steers it, returns to main; no duplicated messages |
-| 4 | Hub overlay P-A then P-B/P-C, keybindings, pinned list | manual QA script in section 9 |
+| 4 (done) | Hub overlay P-A then P-B/P-C, keybindings, pinned list | manual QA script in section 9 |
 | 5 | Extension `ctx.agents`, RPC commands, port subagent example, docs | example extension steerable |
 | 6 | Optional: worktree isolation, RPC-backed remote agents, click-to-focus, advisor rows | per feature |
 
@@ -277,6 +277,34 @@ The `task` tool takes an optional `model` per item, so a stronger main model can
 - A refused spawn leaves nothing behind: the model is resolved before any session directory is created, and the host passes the directory path without creating it.
 
 Verified with the real build and real credentials over RPC: `anthropic/claude-sonnet-5-5` called `task` with `model: "haiku"`, the child ran on `anthropic/claude-haiku-5-5` and answered; an unknown model produced the error above and no child.
+
+## 7e. Phase 4 notes (as built)
+
+Hub additions (all `app.agents.*` keybindings, rebindable, labelled on screen, in `/hotkeys` and in `docs/keybindings.md`):
+
+| Key | Action |
+|---|---|
+| `Tab` | Switch between the agent list and the activity log |
+| `T` | Tree (parents and children) or flat list (running first, then idle, parked, killed; newest activity first) |
+| `/` | Filter by text. `Enter` keeps it, `Esc` clears it; `Esc` clears a kept filter before it closes the hub |
+| `F` | Activity log: cycle all, errors, replies, tools, messages, lifecycle. The hint names the next kind |
+| `S` | Activity log: every agent, or only the agent of the selected entry |
+| `Enter` in the log | View the agent of the selected entry |
+
+The log follows the newest entry until you move up (it then shows `paused`), and resumes when you reach the bottom. The list and the log keep separate filters.
+
+Activity log (`agent-activity.ts`): a bounded (500), in-memory ring owned by `AgentsHost`, fed by:
+- registry changes (killed, parked, revived, finished its run, released), spawn and restore (with who spawned it, type, model and task);
+- each subagent session's events (tool calls with their most telling argument, failed tools, replies, model errors, interrupted runs);
+- the bus, through a new `onDelivery` hook: messages and reports are filed under the subagent at either end, and a failed delivery is an error entry. A message with no subagent at either end (main to an unknown id) is not logged.
+
+The log is not persisted; the transcripts are. A restored agent starts with a single "restored" entry.
+
+Reports and messages (`AgentMessageComponent`): the bus writes `Agent "<id>" finished:` / `Message from agent "<id>":` text (`agent-envelope.ts` now owns that format and its parser). The UI recognises it in the one `user` case of `addMessageToChat` and draws `◀ report from <id>` / `◀ message from <id>` on the custom-message background; reports longer than 12 lines collapse and expand with the tool-output key. The transcript is unchanged (still an ordinary user message), so the model sees the same text, and a person who types the same words gets the same styling and nothing more. Envelopes are kept out of the up-arrow history.
+
+Found while testing: at a very narrow width a single long hint overflowed, because hints were wrapped between items but never cut; fixed in `wrapHints`.
+
+Not done: mouse support, a persisted log, and an unread marker for reports that arrive while you view another agent.
 
 ## 8. Risks
 
