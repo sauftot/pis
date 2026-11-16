@@ -3,6 +3,8 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
+import { MAIN_AGENT_ID } from "./agents/agents-host.ts";
+import { createSessionAgents } from "./agents/create-agents-host.ts";
 import type { SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 import {
@@ -214,7 +216,10 @@ export async function createAgentSessionServices(
 export async function createAgentSessionFromServices(
 	options: CreateAgentSessionFromServicesOptions,
 ): Promise<CreateAgentSessionResult> {
-	return createAgentSession({
+	const agents = options.services.settingsManager.getAgentsSettings().enabled
+		? createSessionAgents(options.services, options.sessionManager)
+		: undefined;
+	const created = await createAgentSession({
 		cwd: options.services.cwd,
 		agentDir: options.services.agentDir,
 		modelRuntime: options.services.modelRuntime,
@@ -227,7 +232,9 @@ export async function createAgentSessionFromServices(
 		tools: options.tools,
 		excludeTools: options.excludeTools,
 		noTools: options.noTools,
-		customTools: options.customTools,
+		customTools: [...(options.customTools ?? []), ...(agents?.host.customTools(MAIN_AGENT_ID, 0) ?? [])],
 		sessionStartEvent: options.sessionStartEvent,
 	});
+	agents?.bindMain(created.session);
+	return created;
 }

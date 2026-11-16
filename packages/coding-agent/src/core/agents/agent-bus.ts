@@ -78,6 +78,7 @@ export async function deliverAgentMessage(session: AgentSessionHandle, envelope:
 }
 
 function formatAgentMessage(envelope: AgentEnvelope): string {
+	if (envelope.kind === "result") return `Agent "${envelope.from}" finished:\n\n${envelope.body}`;
 	return `Message from agent "${envelope.from}":\n\n${envelope.body}`;
 }
 

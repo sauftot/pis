@@ -71,6 +71,33 @@ const RetrySettingsSchema = Type.Object({
 	),
 });
 
+const AgentsSettingsSchema = Type.Object({
+	enabled: Type.Optional(
+		Type.Boolean({
+			description: "Enable subagents: the task and message_agent tools.",
+			default: SETTINGS_DEFAULTS.agents.enabled,
+		}),
+	),
+	idleParkSeconds: Type.Optional(
+		Type.Number({
+			description: "Seconds a finished subagent stays loaded before it is parked to disk. 0 never parks.",
+			default: SETTINGS_DEFAULTS.agents.idleParkSeconds,
+		}),
+	),
+	maxConcurrency: Type.Optional(
+		Type.Number({
+			description: "Subagent runs executing at once; the rest wait for a slot.",
+			default: SETTINGS_DEFAULTS.agents.maxConcurrency,
+		}),
+	),
+	maxDepth: Type.Optional(
+		Type.Number({
+			description: "How deep agents may spawn agents. 1 means only the main agent spawns.",
+			default: SETTINGS_DEFAULTS.agents.maxDepth,
+		}),
+	),
+});
+
 const TerminalSettingsSchema = Type.Object({
 	showImages: Type.Optional(
 		Type.Boolean({
@@ -247,6 +274,7 @@ export const SettingsSchema = Type.Object(
 		compaction: Type.Optional(CompactionSettingsSchema),
 		branchSummary: Type.Optional(BranchSummarySettingsSchema),
 		retry: Type.Optional(RetrySettingsSchema),
+		agents: Type.Optional(AgentsSettingsSchema),
 		hideThinkingBlock: Type.Optional(Type.Boolean({ default: SETTINGS_DEFAULTS.hideThinkingBlock })),
 		showCacheMissNotices: Type.Optional(
 			Type.Boolean({

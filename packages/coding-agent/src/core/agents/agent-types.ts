@@ -1,5 +1,6 @@
 // Shared types for the piss agent registry, lifecycle manager and message bus.
 
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AgentSessionEvent, PromptOptions } from "../agent-session.ts";
 
 /** Lifecycle state of an agent. `parked` and `aborted` agents have no live session but can be revived. */
@@ -11,6 +12,7 @@ export type AgentKind = "main" | "sub";
 export interface AgentSessionHandle {
 	readonly isStreaming: boolean;
 	readonly sessionFile: string | undefined;
+	readonly messages: readonly AgentMessage[];
 	subscribe(listener: (event: AgentSessionEvent) => void): () => void;
 	prompt(text: string, options?: PromptOptions): Promise<void>;
 	abort(): Promise<void>;
@@ -63,6 +65,8 @@ export interface AgentEnvelope {
 	from: string;
 	to: string;
 	body: string;
+	/** `result` is a finished subagent's report to its parent; `message` (default) is a peer or user message. */
+	kind?: "message" | "result";
 	/** When the recipient is running: false queues the message as a follow-up instead of steering. Default true. */
 	interrupt?: boolean;
 }

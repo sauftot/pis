@@ -208,6 +208,31 @@
         }
       }
     },
+    "agents": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable subagents: the task and message_agent tools.",
+          "default": false
+        },
+        "idleParkSeconds": {
+          "type": "number",
+          "description": "Seconds a finished subagent stays loaded before it is parked to disk. 0 never parks.",
+          "default": 300
+        },
+        "maxConcurrency": {
+          "type": "number",
+          "description": "Subagent runs executing at once; the rest wait for a slot.",
+          "default": 4
+        },
+        "maxDepth": {
+          "type": "number",
+          "description": "How deep agents may spawn agents. 1 means only the main agent spawns.",
+          "default": 1
+        }
+      }
+    },
     "hideThinkingBlock": {
       "type": "boolean",
       "default": false

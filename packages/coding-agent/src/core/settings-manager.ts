@@ -925,6 +925,16 @@ export class SettingsManager {
 		};
 	}
 
+	getAgentsSettings(): { enabled: boolean; idleParkMs: number; maxConcurrency: number; maxDepth: number } {
+		const agents = this.settings.agents;
+		return {
+			enabled: agents?.enabled ?? SETTINGS_DEFAULTS.agents.enabled,
+			idleParkMs: (agents?.idleParkSeconds ?? SETTINGS_DEFAULTS.agents.idleParkSeconds) * 1000,
+			maxConcurrency: agents?.maxConcurrency ?? SETTINGS_DEFAULTS.agents.maxConcurrency,
+			maxDepth: agents?.maxDepth ?? SETTINGS_DEFAULTS.agents.maxDepth,
+		};
+	}
+
 	getHttpIdleTimeoutMs(): number {
 		return parseTimeoutSetting(this.settings.httpIdleTimeoutMs, "httpIdleTimeoutMs") ?? DEFAULT_HTTP_IDLE_TIMEOUT_MS;
 	}

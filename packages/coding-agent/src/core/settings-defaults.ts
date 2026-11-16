@@ -24,6 +24,12 @@ export const SETTINGS_DEFAULTS = {
 			maxRetryDelayMs: 60000,
 		},
 	},
+	agents: {
+		enabled: false,
+		idleParkSeconds: 300,
+		maxConcurrency: 4,
+		maxDepth: 1,
+	},
 	hideThinkingBlock: false,
 	showCacheMissNotices: false,
 	quietStartup: false,

@@ -1,5 +1,6 @@
 // A scriptable AgentSessionHandle for registry and lifecycle tests that do not need a real AgentSession.
 
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AgentSessionEvent } from "../../../src/core/agent-session.ts";
 import type { AgentSessionHandle } from "../../../src/core/agents/index.ts";
 
@@ -7,6 +8,7 @@ export interface FakeHandle extends AgentSessionHandle {
 	isStreaming: boolean;
 	disposed: boolean;
 	aborted: boolean;
+	messages: AgentMessage[];
 	emit(event: AgentSessionEvent): void;
 }
 
@@ -15,6 +17,7 @@ export function createFakeHandle(sessionFile: string | null = "/virtual/agent.js
 	const handle: FakeHandle = {
 		isStreaming: false,
 		sessionFile: sessionFile ?? undefined,
+		messages: [],
 		disposed: false,
 		aborted: false,
 		subscribe(listener) {

@@ -423,6 +423,7 @@ export class AgentSession {
 	private _resolveIdleWait: (() => void) | undefined;
 
 	/** Tracks pending steering messages for UI display. Removed when delivered. */
+	private _disposeListeners: Array<() => void> = [];
 	private _steeringMessages: string[] = [];
 	/** Tracks pending follow-up messages for UI display. Removed when delivered. */
 	private _followUpMessages: string[] = [];
@@ -1476,7 +1477,13 @@ export class AgentSession {
 	 * Remove all listeners and disconnect from agent.
 	 * Call this when completely done with the session.
 	 */
+	/** Run `listener` when this session is disposed. Used by the agents host to release subagents with their parent. */
+	addDisposeListener(listener: () => void): void {
+		this._disposeListeners.push(listener);
+	}
+
 	dispose(): void {
+		for (const listener of this._disposeListeners.splice(0)) listener();
 		try {
 			this.abortRetry();
 			this.abortCompaction();
