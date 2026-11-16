@@ -16,6 +16,13 @@ export interface SessionAgents {
 	bindMain(session: AgentSession): void;
 }
 
+const hostsBySession = new WeakMap<AgentSession, AgentsHost>();
+
+/** The agents host of a top-level session, or undefined when agents are disabled for it. */
+export function getSessionAgentsHost(session: AgentSession): AgentsHost | undefined {
+	return hostsBySession.get(session);
+}
+
 export function createSessionAgents(services: AgentSessionServices, sessionManager: SessionManager): SessionAgents {
 	let main: AgentSession | undefined;
 	let definitions: AgentDefinition[] | undefined;
@@ -39,6 +46,7 @@ export function createSessionAgents(services: AgentSessionServices, sessionManag
 		host,
 		bindMain(session) {
 			main = session;
+			hostsBySession.set(session, host);
 			host.attachMain(session);
 			host.restorePersisted();
 			session.addDisposeListener(() => void host.dispose());

@@ -54,7 +54,7 @@ export interface AgentsHostOptions {
 
 const DELIVERY_ATTEMPTS = 4;
 
-interface AgentInfo {
+export interface AgentInfo {
 	agent: string;
 	task: string;
 }
@@ -93,6 +93,19 @@ export class AgentsHost implements AgentToolsHost {
 			status: session.isStreaming ? "running" : "idle",
 		});
 		this.unsyncMain = this.registry.syncSessionStatus(MAIN_AGENT_ID, session);
+	}
+
+	/** What an agent was spawned to do, for rosters and inspectors. Undefined for an unknown id. */
+	describe(id: string): AgentInfo | undefined {
+		return this.info.get(id);
+	}
+
+	/** Abort an agent's current run without killing it. Returns false when it has no live session. */
+	async interrupt(id: string): Promise<boolean> {
+		const session = this.registry.get(id)?.session;
+		if (!session) return false;
+		await session.abort();
+		return true;
 	}
 
 	availableAgents(): AgentDefinition[] {

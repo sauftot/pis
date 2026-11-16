@@ -66,9 +66,10 @@ import {
 	getDocsPath,
 	VERSION,
 } from "../../config.ts";
-import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
+import { AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
+import { type AgentsHost, buildRoster, getSessionAgentsHost, MAIN_AGENT_ID } from "../../core/agents/index.ts";
 import {
 	CACHE_TTL_MS,
 	type CacheMiss,
@@ -142,6 +143,9 @@ import { loadAllHighlightLanguages } from "../../utils/syntax-highlight.ts";
 import { stripBom } from "../../utils/text.ts";
 import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
+import { AgentFocusController } from "./agents/agent-focus-controller.ts";
+import { AgentHubComponent } from "./agents/agent-hub.ts";
+import { formatAgentsLine } from "./agents/agents-line.ts";
 import { reportBug } from "./bug-report.ts";
 import { createChatViewport } from "./chat-viewport.ts";
 import { ArminComponent } from "./components/armin.ts";
@@ -619,9 +623,14 @@ export class InteractiveMode {
 	private autoTrustOnReloadCwd: string | undefined;
 	private themeController: InteractiveThemeController;
 
+	/** Decides whether the view shows the main agent or one subagent. */
+	private agentFocus: AgentFocusController | undefined;
+	private unwatchAgents: (() => void) | undefined;
+
 	// Convenience accessors
 	private get session(): AgentSession {
-		return this.runtimeHost.session;
+		// While a subagent is focused every view of "the session" (transcript, footer, editor, model) is the subagent's.
+		return this.agentFocus?.session ?? this.runtimeHost.session;
 	}
 	private get agent() {
 		return this.session.agent;
@@ -635,15 +644,24 @@ export class InteractiveMode {
 
 	constructor(runtimeHost: AgentSessionRuntime, options: InteractiveModeOptions = {}) {
 		this.runtimeHost = runtimeHost;
+		this.agentFocus = new AgentFocusController({
+			getHost: () => getSessionAgentsHost(this.runtimeHost.session),
+			retargetView: () => this.retargetView(),
+			notify: (message) => this.showStatus(message),
+			asViewSession: (handle) => (handle instanceof AgentSession ? handle : undefined),
+		});
 		setCapabilityOverrides(this.settingsManager.getTerminalCapabilityOverrides());
 		const tuiMode = options.tuiMode ?? this.settingsManager.getTuiMode();
 		this.options = { ...options, tuiMode };
 		this.autoTrustOnReloadCwd = options.autoTrustOnReloadCwd;
 		this.runtimeHost.setBeforeSessionInvalidate(() => {
+			// The subagents belong to the session being replaced and are released with it.
+			this.agentFocus?.reset();
 			this.resetExtensionUI();
 		});
 		this.runtimeHost.setRebindSession(async () => {
 			await this.rebindCurrentSession({ renderBeforeBind: true });
+			this.watchAgents();
 			this.themeController.applyFromSettings();
 		});
 		this.version = VERSION;
@@ -684,6 +702,7 @@ export class InteractiveMode {
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
 		this.footer = new FooterComponent(this.session, this.footerDataProvider);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
+		this.footer.setAgentsLine((width) => this.renderAgentsLine(width));
 		this.footerContainer = new Container();
 		this.footerContainer.addChild(this.footer);
 
@@ -1037,6 +1056,7 @@ export class InteractiveMode {
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
 		this.ui.start();
 		this.isInitialized = true;
+		this.watchAgents();
 		this.programStatus.report();
 		this.ensurePngTranscoder();
 
@@ -3244,6 +3264,10 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
 		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
+		this.defaultEditor.onAction("app.agents.hub", () => this.showAgentHub());
+		this.defaultEditor.onAction("app.agents.next", () => void this.cycleAgentFocus(1));
+		this.defaultEditor.onAction("app.agents.previous", () => void this.cycleAgentFocus(-1));
+		this.defaultEditor.onAction("app.agents.main", () => this.returnToMainAgent());
 
 		this.defaultEditor.onChange = (text: string) => {
 			const wasBashMode = this.isBashMode;
@@ -3388,6 +3412,11 @@ export class InteractiveMode {
 			if (text === "/changelog") {
 				this.handleChangelogCommand();
 				this.editor.setText("");
+				return;
+			}
+			if (text === "/agents" || text.startsWith("/agents ")) {
+				this.editor.setText("");
+				await this.handleAgentsCommand(text.slice("/agents".length).trim());
 				return;
 			}
 			if (text === "/hotkeys") {
@@ -4700,6 +4729,9 @@ export class InteractiveMode {
 	private updateEditorBorderColor(): void {
 		if (this.isBashMode) {
 			this.editor.borderColor = theme.getBashModeBorderColor();
+		} else if (this.agentFocus?.focusedId !== undefined) {
+			// A distinct border so it is always obvious the editor is talking to a subagent.
+			this.editor.borderColor = (text: string) => theme.fg("accent", text);
 		} else {
 			const level = this.session.thinkingLevel || "off";
 			this.editor.borderColor = theme.getThinkingBorderColor(level);
@@ -5362,6 +5394,149 @@ export class InteractiveMode {
 		}
 	}
 
+	// =========================================================================
+	// Agents: focus, hub and commands
+	// =========================================================================
+
+	/**
+	 * Point the transcript, status line and editor at the session the agent focus now selects, the focused
+	 * subagent or the main agent. Like a session switch without rebinding extensions: the extension UI stays
+	 * with the main session.
+	 */
+	private retargetView(): void {
+		this.unsubscribe?.();
+		this.unsubscribe = undefined;
+		this.clearStatusIndicator();
+		this.programStatus.reset();
+		this.applyRuntimeSettings();
+		this.renderCurrentSessionState();
+		this.subscribeToAgent();
+		this.catchUpWithRunningSession();
+		this.updateEditorBorderColor();
+		this.updateTerminalTitle();
+		this.ui.requestRender();
+	}
+
+	/**
+	 * A transcript rebuilt while the session is mid-run lacks the message being written and the working
+	 * indicator, because those arrive only as events. Replay the run's opening events so later updates attach.
+	 */
+	private catchUpWithRunningSession(): void {
+		if (!this.session.isStreaming) return;
+		void this.handleEvent({ type: "agent_start" });
+		void this.handleEvent({ type: "turn_start" });
+		const partial = this.session.agent.state.streamingMessage;
+		if (partial?.role === "assistant") void this.handleEvent({ type: "message_start", message: partial });
+	}
+
+	private renderAgentsLine(width: number): string | undefined {
+		const host = getSessionAgentsHost(this.runtimeHost.session);
+		if (!host) return undefined;
+		return formatAgentsLine({
+			rows: buildRoster(host.registry, (id) => host.describe(id)),
+			focusedId: this.agentFocus?.focusedId,
+			width,
+		});
+	}
+
+	/** Redraw when agents change state, so the agents line and an open hub stay current. */
+	private watchAgents(): void {
+		this.unwatchAgents?.();
+		this.unwatchAgents = getSessionAgentsHost(this.runtimeHost.session)?.registry.onChange(() =>
+			this.ui.requestRender(),
+		);
+	}
+
+	private returnToMainAgent(): void {
+		if (this.agentFocus?.focusedId === undefined) {
+			this.showStatus("Already on the main agent");
+			return;
+		}
+		this.agentFocus.unfocus();
+	}
+
+	private async cycleAgentFocus(direction: 1 | -1): Promise<void> {
+		try {
+			await this.agentFocus?.cycle(direction);
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	/** Message, interrupt, kill and revive as the user speaking for the main agent, shared by the hub and `/agents`. */
+	private createAgentActions(host: AgentsHost) {
+		return {
+			message: async (id: string, text: string): Promise<string> => {
+				const receipt = await host.bus.send({ from: MAIN_AGENT_ID, to: id, body: text });
+				if (receipt.outcome === "failed") throw new Error(receipt.error);
+				return receipt.outcome === "revived" ? `Revived ${id} and delivered the message.` : `Delivered to ${id}.`;
+			},
+			interrupt: async (id: string): Promise<string> => {
+				if (!(await host.interrupt(id))) throw new Error(`${id} has no running session to interrupt.`);
+				return `Interrupted ${id}. It keeps its context; message it to continue.`;
+			},
+			kill: async (id: string): Promise<string> => {
+				if (!(await host.lifecycle.kill(id))) throw new Error(`No agent named "${id}".`);
+				return `Killed ${id}. Messaging or reviving it brings it back with its history.`;
+			},
+			revive: async (id: string): Promise<string> => {
+				if (!host.registry.get(id)) throw new Error(`No agent named "${id}".`);
+				if (host.registry.get(id)?.session) return `${id} is already running.`;
+				await host.lifecycle.ensureLive(id);
+				return `Revived ${id} from its transcript.`;
+			},
+		};
+	}
+
+	private showAgentHub(): void {
+		const host = getSessionAgentsHost(this.runtimeHost.session);
+		if (!host) {
+			this.showStatus('Agents are not enabled. Set "agents": { "enabled": true } in settings.');
+			return;
+		}
+		this.showSelector((done) => {
+			const hub = new AgentHubComponent({
+				getRows: () => buildRoster(host.registry, (id) => host.describe(id)),
+				getMainStatus: () => host.registry.get(MAIN_AGENT_ID)?.status,
+				getFocusedId: () => this.agentFocus?.focusedId,
+				now: () => Date.now(),
+				requestRender: () => this.ui.requestRender(),
+				actions: {
+					...this.createAgentActions(host),
+					focus: (id) => this.agentFocus?.focus(id) ?? Promise.resolve(),
+					close: done,
+				},
+			});
+			// Ages in the roster are relative, so keep them moving while the hub is open.
+			const ticker = setInterval(() => this.ui.requestRender(), 1000);
+			return { component: hub, focus: hub, dispose: () => clearInterval(ticker) };
+		});
+	}
+
+	private async handleAgentsCommand(args: string): Promise<void> {
+		const host = getSessionAgentsHost(this.runtimeHost.session);
+		if (!host) {
+			this.showStatus('Agents are not enabled. Set "agents": { "enabled": true } in settings.');
+			return;
+		}
+		const [verb, id, ...rest] = args.split(/\s+/).filter(Boolean);
+		const actions = this.createAgentActions(host);
+		const usage = "Usage: /agents [focus <id> | main | kill <id> | revive <id> | interrupt <id> | msg <id> <text>]";
+		try {
+			if (verb === undefined || verb === "hub" || verb === "list") this.showAgentHub();
+			else if (verb === "main") this.returnToMainAgent();
+			else if (!id) this.showError(usage);
+			else if (verb === "focus") await this.agentFocus?.focus(id);
+			else if (verb === "kill") this.showStatus(await actions.kill(id));
+			else if (verb === "revive") this.showStatus(await actions.revive(id));
+			else if (verb === "interrupt") this.showStatus(await actions.interrupt(id));
+			else if (verb === "msg" && rest.length > 0) this.showStatus(await actions.message(id, rest.join(" ")));
+			else this.showError(usage);
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
 	private showThinkingSelector(): void {
 		this.showSelector((done) => {
 			const selectLevel = (level: ThinkingLevel, persist: boolean) => {
@@ -5690,6 +5865,8 @@ export class InteractiveMode {
 	}
 
 	private showUserMessageSelector(): void {
+		// This acts on the main session, so show it first.
+		this.agentFocus?.unfocus();
 		const userMessages = this.session.getUserMessagesForForking();
 
 		if (userMessages.length === 0) {
@@ -5728,6 +5905,8 @@ export class InteractiveMode {
 	}
 
 	private async handleCloneCommand(): Promise<void> {
+		// This acts on the main session, so show it first.
+		this.agentFocus?.unfocus();
 		const leafId = this.sessionManager.getLeafId();
 		if (!leafId) {
 			this.showStatus("Nothing to clone yet");
@@ -5898,6 +6077,8 @@ export class InteractiveMode {
 	}
 
 	private showSessionSelector(): void {
+		// This acts on the main session, so show it first.
+		this.agentFocus?.unfocus();
 		this.showSelector((done) => {
 			const selector = new SessionSelectorComponent(
 				(onProgress, signal) =>
@@ -6616,6 +6797,8 @@ export class InteractiveMode {
 	// =========================================================================
 
 	private async handleReloadCommand(): Promise<void> {
+		// This acts on the main session, so show it first.
+		this.agentFocus?.unfocus();
 		if (this.session.isStreaming) {
 			this.showWarning("Wait for the current response to finish before reloading.");
 			return;
@@ -6753,6 +6936,8 @@ export class InteractiveMode {
 	}
 
 	private async handleImportCommand(text: string): Promise<void> {
+		// This acts on the main session, so show it first.
+		this.agentFocus?.unfocus();
 		const inputPath = this.getPathCommandArgument(text, "/import");
 		if (!inputPath) {
 			this.showError("Usage: /import <path.jsonl>");
@@ -7040,6 +7225,15 @@ export class InteractiveMode {
 		const followUp = this.getAppKeyDisplay("app.message.followUp");
 		const dequeue = this.getAppKeyDisplay("app.message.dequeue");
 		const pasteImage = this.getAppKeyDisplay("app.clipboard.pasteImage");
+		const agentHub = this.getAppKeyDisplay("app.agents.hub");
+		const agentNext = this.getAppKeyDisplay("app.agents.next");
+		const agentPrevious = this.getAppKeyDisplay("app.agents.previous");
+		const agentMain = this.getAppKeyDisplay("app.agents.main");
+		const hubMessage = this.getAppKeyDisplay("app.agents.message");
+		const hubInterrupt = this.getAppKeyDisplay("app.agents.interrupt");
+		const hubKill = this.getAppKeyDisplay("app.agents.kill");
+		const hubRevive = this.getAppKeyDisplay("app.agents.revive");
+		const hubDetails = this.getAppKeyDisplay("app.agents.details");
 
 		let hotkeys = `
 **Navigation**
@@ -7087,6 +7281,19 @@ export class InteractiveMode {
 | \`/\` | Slash commands |
 | \`!\` | Run bash command |
 | \`!!\` | Run bash command (excluded from context) |
+
+**Agents** (needs \`agents.enabled\`)
+| Key | Action |
+|-----|--------|
+| \`${agentHub}\` | Open the agent hub: list, inspect and steer agents |
+| \`${agentNext}\` / \`${agentPrevious}\` | Switch the view to the next / previous agent (the main agent is one stop) |
+| \`${agentMain}\` | Return the view to the main agent |
+| \`${interrupt}\` | While viewing an agent: interrupt its current run |
+| \`${hubMessage}\` | In the hub: message the selected agent without opening it |
+| \`${hubInterrupt}\` | In the hub: interrupt the selected agent's current run |
+| \`${hubKill}\` / \`${hubRevive}\` | In the hub: kill / revive the selected agent |
+| \`${hubDetails}\` | In the hub: show or hide the selected agent's details |
+| \`/agents\` | Same as the hub. Subcommands: focus, main, kill, revive, interrupt, msg |
 `;
 
 		// Add extension-registered shortcuts
@@ -7115,6 +7322,8 @@ export class InteractiveMode {
 	}
 
 	private async handleClearCommand(): Promise<void> {
+		// This acts on the main session, so show it first.
+		this.agentFocus?.unfocus();
 		this.clearStatusIndicator();
 		try {
 			const result = await this.runtimeHost.newSession();

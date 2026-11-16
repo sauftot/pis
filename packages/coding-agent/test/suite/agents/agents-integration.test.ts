@@ -1,80 +1,21 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { fauxAssistantMessage, fauxToolCall, registerFauxProvider } from "@earendil-works/pi-ai/compat";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-	type CreateAgentSessionRuntimeFactory,
-	createAgentSessionFromServices,
-	createAgentSessionRuntime,
-	createAgentSessionServices,
-} from "../../../src/core/agent-session-runtime.ts";
-import { SessionManager } from "../../../src/core/session-manager.ts";
-import { SettingsManager } from "../../../src/core/settings-manager.ts";
-import type { ExtensionAPI } from "../../../src/index.ts";
 import { getMessageText } from "../harness.ts";
+import { bootAgentsRuntime } from "./agents-runtime.ts";
 
 /** The whole path: settings turn agents on, the model calls `task`, a real child session runs and reports back. */
 describe("agents end to end", () => {
-	const cleanups: Array<() => Promise<void> | void> = [];
+	const cleanups: Array<() => Promise<void>> = [];
 	afterEach(async () => {
 		while (cleanups.length > 0) await cleanups.pop()?.();
 	});
 
 	async function boot(agentsEnabled: boolean) {
-		const tempDir = mkdtempSync(join(tmpdir(), "piss-e2e-"));
-		mkdirSync(join(tempDir, "sessions"), { recursive: true });
-		const faux = registerFauxProvider({ models: [{ id: "faux-1" }] });
-		const model = faux.getModel();
-
-		const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
-			const services = await createAgentSessionServices({
-				cwd,
-				agentDir: tempDir,
-				settingsManager: SettingsManager.inMemory({ agents: { enabled: agentsEnabled, idleParkSeconds: 0 } }),
-				resourceLoaderOptions: {
-					extensionFactories: [
-						(pi: ExtensionAPI) => {
-							pi.registerProvider(model.provider, {
-								baseUrl: model.baseUrl,
-								apiKey: "faux-key",
-								api: faux.api,
-								models: faux.models.map((m) => ({
-									id: m.id,
-									name: m.name,
-									api: m.api,
-									reasoning: m.reasoning,
-									input: m.input,
-									cost: m.cost,
-									contextWindow: m.contextWindow,
-									maxTokens: m.maxTokens,
-								})),
-							});
-						},
-					],
-					noSkills: true,
-					noPromptTemplates: true,
-					noThemes: true,
-				},
-			});
-			return {
-				...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model })),
-				services,
-				diagnostics: services.diagnostics,
-			};
-		};
-		const runtime = await createAgentSessionRuntime(createRuntime, {
-			cwd: tempDir,
-			agentDir: tempDir,
-			sessionManager: SessionManager.create(tempDir, join(tempDir, "sessions")),
-		});
-		await runtime.session.bindExtensions({});
-		cleanups.push(async () => {
-			await runtime.dispose();
-			faux.unregister();
-			rmSync(tempDir, { recursive: true, force: true });
-		});
-		return { runtime, faux };
+		const booted = await bootAgentsRuntime({ agentsEnabled });
+		cleanups.push(booted.cleanup);
+		return booted;
 	}
 
 	it("registers no agent tools when agents are disabled", async () => {

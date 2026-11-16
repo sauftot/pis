@@ -2,7 +2,7 @@
 
 piss is a fork of pi (`earendil-works/pi`, coding-agent 1.5.x). Goal: manage subagents from inside the chat the way omp (`can1357/oh-my-pi`) does: see them, read them, steer them, kill and revive them, without leaving the session.
 
-Status: phases 1 and 2 implemented in `packages/coding-agent/src/core/agents/` (99 tests in `test/suite/agents/`, plus a manual smoke run against a real model). Enable with the setting `agents.enabled`. Phases 3-6 not started.
+Status: phases 1, 2 and 3 implemented (core in `packages/coding-agent/src/core/agents/`, UI in `src/modes/interactive/agents/`; 169 tests in `test/suite/agents/`, including the real InteractiveMode driven on a virtual terminal). Enable with `agents.enabled`. User guide: [agents.md](./agents.md). Phases 4-6 not started; the hub of phase 4 is partly delivered early (see 7c).
 
 ## 1. Problem
 
@@ -193,7 +193,7 @@ Then port `examples/extensions/subagent` to use it (child steerable, listed in H
 | 0 | Fork hygiene: rename branding to piss (package scope, binary `piss`, config dir `.piss` or keep `.pi` per decision O1), upstream remote, CI check | `npm run check` green, `piss --version` |
 | 1 (done) | Registry + lifecycle + bus, headless. `AgentSession.deliverAgentMessage`. Unit tests with faux provider harness (`test/suite/harness.ts`): steer running, prompt idle, revive parked, failed unknown, broadcast rules, stale-generation guard | tests pass |
 | 2 (done) | `task` tool + `message_agent` tool, persistence under `agents/`, result delivery to parent, concurrency/depth limits | model can spawn 2 agents, message one mid-run, parent gets both results |
-| 3 | Focus controller + `/agents` roster (no overlay yet) + footer indicator | user focuses a running child, steers it, returns to main; no duplicated messages |
+| 3 (done) | Focus controller + `/agents` roster (no overlay yet) + footer indicator | user focuses a running child, steers it, returns to main; no duplicated messages |
 | 4 | Hub overlay P-A then P-B/P-C, keybindings, pinned list | manual QA script in section 9 |
 | 5 | Extension `ctx.agents`, RPC commands, port subagent example, docs | example extension steerable |
 | 6 | Optional: worktree isolation, RPC-backed remote agents, click-to-focus, advisor rows | per feature |
@@ -230,6 +230,38 @@ Known limits:
 - Aborting the main agent (Esc) does not stop its children; use kill. Disposing the main session does.
 - A subagent has no tool to discover its siblings. It learns ids from the spawn result, the incoming message, or its initial prompt (which names its parent).
 - `agents.*` do not appear in the `/settings` menu yet.
+
+## 7c. Phase 3 notes (as built)
+
+Delivered: focus controller, `/agents`, the agent hub overlay (roster, details inspector, inline message, interrupt, kill, revive), the always-visible agents line, and the hotkeys. Phase 4's hub, inspector and pinned-list work is therefore largely done; what remains there is the activity log, tree toggle, filtering and mouse.
+
+Hotkeys (all `app.agents.*` keybindings, rebindable, labelled on screen and in `/hotkeys`):
+
+| Key | Action |
+|---|---|
+| `Alt+A` | Open the hub |
+| `Alt+.` / `Alt+,` | Next / previous agent; the main agent is one stop in the cycle |
+| `Alt+M` | Back to the main agent |
+| `Esc` while viewing an agent | Interrupt that agent's run (never main's) |
+| Hub: `Enter` `M` `I` `X` `R` `D` | View and steer, message, interrupt, kill, revive, details |
+
+`Alt+[` was avoided on purpose: it is the CSI introducer, so terminals cannot tell it from the start of an escape sequence.
+
+How the view retargets:
+- `InteractiveMode.session` returns the focused agent's session when one is focused, so the transcript, editor submit, footer, model and thinking controls all follow with no per-call-site change. `retargetView()` is the one place that rebuilds the view: unsubscribe, clear the status indicator, re-render the transcript from the new session, resubscribe, then catch up.
+- Catch-up: a transcript rebuilt mid-run lacks the message being written and the working indicator, because those only arrive as events. `catchUpWithRunningSession()` replays `agent_start`, `turn_start` and `message_start` with `agent.state.streamingMessage`, so later updates attach. Tested with a slowly streaming faux model.
+- A focused agent is pinned (`lifecycle.pin`) so the idle timer cannot park it while it is on screen. It is released when the view leaves it.
+- If the focused agent is killed or released the view returns to main on its own. A newer focus request wins over a slower earlier revive (monotonic request id).
+- `/new`, `/resume`, `/fork`, `/clone`, `/import` and `/reload` return to the main view first, since they act on the main session. Replacing the session resets the focus and the old session's agents are released with it.
+- The extension UI stays bound to the main session; focusing a subagent does not rebind extensions.
+
+Hooks into upstream files (kept thin): `interactive-mode.ts` (session getter, `retargetView`, hub and command methods, key actions, border colour, a call in the rebind callback), `footer.ts` (an optional line above the footer), `keybindings.ts`, `slash-commands.ts`. `rebindCurrentSession` itself is untouched on purpose: upstream tests call it on a hand-built stub `this`, so new calls inside it break them.
+
+Known limits:
+- The hub has no filter, tree toggle or activity log yet (phase 4); long rosters scroll.
+- No mouse support.
+- Tool calls already running when an agent is focused do not get a card until they finish; the rest of the run renders live.
+- Verified on a virtual terminal (xterm-headless), not a real one.
 
 ## 8. Risks
 

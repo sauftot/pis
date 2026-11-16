@@ -26,6 +26,8 @@ interface Managed {
 
 export class AgentLifecycle {
 	private readonly managed = new Map<string, Managed>();
+	/** Agents someone is looking at, with how many holders each has. A pinned agent is never parked. */
+	private readonly pins = new Map<string, number>();
 	private readonly registry: AgentRegistry;
 	private readonly options: AgentLifecycleOptions;
 	private readonly unsubscribeRegistry: () => void;
@@ -68,7 +70,7 @@ export class AgentLifecycle {
 		const ref = this.registry.get(id);
 		const entry = this.managed.get(id);
 		if (!ref || !entry || ref.status !== "idle" || !ref.session || !ref.sessionFile) return false;
-		if (ref.session.isStreaming) return false;
+		if (ref.session.isStreaming || this.pins.has(id)) return false;
 		const session = ref.session;
 		entry.epoch++;
 		this.teardownBinding(entry);
@@ -76,6 +78,27 @@ export class AgentLifecycle {
 		this.registry.setStatus(id, "parked", ref);
 		session.dispose();
 		return true;
+	}
+
+	/**
+	 * Keep `id` loaded while it is being viewed. Returns the function that ends this pin; the idle timer
+	 * restarts when the last pin on an idle agent ends.
+	 */
+	pin(id: string): () => void {
+		this.pins.set(id, (this.pins.get(id) ?? 0) + 1);
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			const remaining = (this.pins.get(id) ?? 1) - 1;
+			if (remaining > 0) {
+				this.pins.set(id, remaining);
+				return;
+			}
+			this.pins.delete(id);
+			const entry = this.managed.get(id);
+			if (entry && this.registry.get(id)?.status === "idle") this.armTimer(id, entry);
+		};
 	}
 
 	/**
@@ -114,6 +137,7 @@ export class AgentLifecycle {
 		entry.epoch++;
 		await this.endSession(id, ref, entry);
 		this.managed.delete(id);
+		this.pins.delete(id);
 		this.registry.unregister(id, ref);
 		return true;
 	}

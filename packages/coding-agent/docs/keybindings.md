@@ -166,6 +166,24 @@ On native Windows, `app.suspend` has no default because Windows terminals do not
 | `app.message.followUp` | `alt+enter` (`ctrl+q` on Windows and WSL) | Queue follow-up message |
 | `app.message.dequeue` | `alt+up` (`alt+q` on Windows and WSL) | Restore queued messages to editor |
 
+### Agents
+
+Active when `agents.enabled` is set. See [agents](../../../docs/piss/agents.md) for what they do.
+
+| Keybinding id | Default | Description |
+|--------|---------|-------------|
+| `app.agents.hub` | `alt+a` | Open the agent hub: list, inspect and steer agents |
+| `app.agents.next` | `alt+.` | Switch the view to the next agent. The main agent is one stop in the cycle |
+| `app.agents.previous` | `alt+,` | Switch the view to the previous agent |
+| `app.agents.main` | `alt+m` | Return the view to the main agent |
+| `app.agents.message` | `m` | In the hub: send a message to the selected agent without opening it |
+| `app.agents.interrupt` | `i` | In the hub: interrupt the selected agent's current run. The agent keeps its context |
+| `app.agents.kill` | `x` | In the hub: kill the selected agent. It can be revived |
+| `app.agents.revive` | `r` | In the hub: revive the selected parked or killed agent |
+| `app.agents.details` | `d` | In the hub: show or hide the selected agent's details |
+
+While an agent is shown, `app.interrupt` (`escape`) interrupts that agent's run, not the main agent's. The hub also uses `tui.select.up`, `tui.select.down`, `tui.select.confirm` (view and steer the selected agent) and `tui.select.cancel` (close).
+
 ### Tree Navigation
 
 | Keybinding id | Default | Description |

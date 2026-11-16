@@ -81,6 +81,61 @@ describe("AgentLifecycle", () => {
 		});
 	});
 
+	describe("pin", () => {
+		it("keeps a pinned agent loaded past the idle TTL, and parks it a TTL after the pin ends", () => {
+			const { spawn, lifecycle } = setup();
+			const { ref, session } = spawn("A");
+			const unpin = lifecycle.pin("A");
+
+			vi.advanceTimersByTime(TTL * 5);
+			expect(lifecycle.park("A")).toBe(false);
+			expect(ref.status).toBe("idle");
+			expect(session.disposed).toBe(false);
+
+			unpin();
+			vi.advanceTimersByTime(TTL - 1);
+			expect(ref.status).toBe("idle");
+			vi.advanceTimersByTime(1);
+			expect(ref.status).toBe("parked");
+		});
+
+		it("holds until every pin on the agent has ended, and ending one twice counts once", () => {
+			const { spawn, lifecycle } = setup();
+			const { ref } = spawn("A");
+			const first = lifecycle.pin("A");
+			const second = lifecycle.pin("A");
+
+			first();
+			first();
+			vi.advanceTimersByTime(TTL * 2);
+			expect(ref.status).toBe("idle");
+			second();
+			vi.advanceTimersByTime(TTL);
+			expect(ref.status).toBe("parked");
+		});
+
+		it("does not start a park timer when the pinned agent is running", () => {
+			const { spawn, lifecycle } = setup();
+			const { ref, session } = spawn("A");
+			const unpin = lifecycle.pin("A");
+			session.emit(agentStart);
+			unpin();
+			vi.advanceTimersByTime(TTL * 3);
+			expect(ref.status).toBe("running");
+		});
+
+		it("forgets pins when the agent is released", async () => {
+			const { spawn, lifecycle, registry } = setup();
+			spawn("A");
+			lifecycle.pin("A");
+			await lifecycle.release("A");
+			const { ref } = spawn("A");
+			vi.advanceTimersByTime(TTL);
+			expect(registry.get("A")).toBe(ref);
+			expect(ref.status).toBe("parked");
+		});
+	});
+
 	describe("ensureLive", () => {
 		it("returns the existing session of a live agent without reviving", async () => {
 			const { spawn, lifecycle, reviver } = setup();

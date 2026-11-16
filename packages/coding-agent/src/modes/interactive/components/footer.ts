@@ -64,6 +64,7 @@ export class FooterComponent implements Component {
 	private session: AgentSession;
 	private footerData: ReadonlyFooterDataProvider;
 	private sessionStats?: SessionStats;
+	private agentsLine: ((width: number) => string | undefined) | undefined;
 
 	constructor(session: AgentSession, footerData: ReadonlyFooterDataProvider) {
 		this.session = session;
@@ -72,6 +73,11 @@ export class FooterComponent implements Component {
 
 	setSession(session: AgentSession): void {
 		this.session = session;
+	}
+
+	/** A line shown above the usual footer lines, or none when the provider returns undefined. */
+	setAgentsLine(provider: ((width: number) => string | undefined) | undefined): void {
+		this.agentsLine = provider;
 	}
 
 	setAutoCompactEnabled(enabled: boolean): void {
@@ -297,6 +303,7 @@ export class FooterComponent implements Component {
 			lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
 		}
 
-		return lines;
+		const agents = this.agentsLine?.(width);
+		return agents === undefined ? lines : [agents, ...lines];
 	}
 }
