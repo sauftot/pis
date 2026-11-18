@@ -170,7 +170,7 @@ You are a scout. Investigate quickly and report findings another agent can use.
 
 ## Limits
 
-- One-shot modes (`-p`, JSON) exit when the main run ends, so background agents and their reports are lost there. Use the interactive UI or RPC mode.
+- One-shot modes (`-p`, JSON) wait, after each prompt, until every agent it started has finished and the main agent has answered their reports, then print that answer. A subagent that never finishes keeps the process running; stop it with Ctrl+C.
 - Aborting the main agent does not stop its subagents. Kill them, or close the session.
 - Extensions reach agents through `ctx.agents`, RPC clients through the `agent_*` commands, and SDK code through `getAgentsApi(session)`; see the extension, RPC and SDK docs. [`examples/extensions/steerable-subagent`](../../packages/coding-agent/examples/extensions/steerable-subagent/) is a `subagent` tool built on it.
 - Subagents run without extensions, skills and MCP tools.

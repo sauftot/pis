@@ -93,6 +93,9 @@ export class AgentsHost implements AgentToolsHost {
 	private readonly waiters = new Map<string, Set<(outcome: RunOutcome) => void>>();
 	/** Ids handed out by spawns still building their session, so concurrent spawns cannot pick the same id. */
 	private readonly reservedIds = new Set<string>();
+	/** Reports being delivered to a parent, including retries. Part of what {@link AgentsHost.whenQuiet} waits for. */
+	private reportsInFlight = 0;
+	private readonly quietWaiters = new Set<() => void>();
 	private unsyncMain: (() => void) | undefined;
 	private disposed = false;
 
@@ -111,6 +114,7 @@ export class AgentsHost implements AgentToolsHost {
 			}
 			if (event.type === "removed") this.settleWaiters(event.ref.id, { status: "released" });
 			this.logRegistryEvent(event);
+			this.checkQuiet();
 		});
 	}
 
@@ -164,6 +168,15 @@ export class AgentsHost implements AgentToolsHost {
 			waiting.add(waiter);
 			signal?.addEventListener("abort", onAbort, { once: true });
 		});
+	}
+
+	/**
+	 * Resolve once no agent (main included) is running and no report is on its way to a parent. The main session
+	 * may still be starting a run for a report that was just accepted; check `isIdle` on it and wait again.
+	 */
+	whenQuiet(): Promise<void> {
+		if (this.disposed || this.isQuiet()) return Promise.resolve();
+		return new Promise((resolve) => this.quietWaiters.add(resolve));
 	}
 
 	/** Models `task` may choose from, or undefined when any authenticated model is allowed. */
@@ -285,6 +298,7 @@ export class AgentsHost implements AgentToolsHost {
 		await this.lifecycle.dispose();
 		// The registry listener that settles waiters on removal is gone by now.
 		for (const id of [...this.waiters.keys()]) this.settleWaiters(id, { status: "released" });
+		this.resolveQuietWaiters();
 	}
 
 	private async revive(stale: AgentRef): Promise<AgentSessionHandle> {
@@ -426,7 +440,32 @@ export class AgentsHost implements AgentToolsHost {
 			});
 			return;
 		}
-		await this.sendResult(ref, body);
+		this.reportsInFlight++;
+		try {
+			await this.sendResult(ref, body);
+		} finally {
+			this.reportsInFlight--;
+			this.checkQuiet();
+		}
+	}
+
+	private isQuiet(): boolean {
+		return this.reportsInFlight === 0 && this.registry.list().every((ref) => ref.status !== "running");
+	}
+
+	private checkQuiet(): void {
+		if (this.quietWaiters.size === 0) return;
+		// Deferred: a child's status turns idle before its own agent_settled handler starts the report, in the same
+		// synchronous event dispatch. Checking after the dispatch sees the report as in flight.
+		queueMicrotask(() => {
+			if (this.isQuiet()) this.resolveQuietWaiters();
+		});
+	}
+
+	private resolveQuietWaiters(): void {
+		const waiting = [...this.quietWaiters];
+		this.quietWaiters.clear();
+		for (const resolve of waiting) resolve();
 	}
 
 	/** Resolve and forget every waiter of `id`. Returns whether there were any. */

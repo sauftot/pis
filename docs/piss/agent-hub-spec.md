@@ -225,7 +225,7 @@ Pieces added:
 Verified: unit and integration tests (faux provider, real transcript files, a simulated restart), and a manual run through `--mode rpc` with a real model: the model called `task`, the child answered, the report arrived as a message and the main agent replied.
 
 Known limits:
-- Print and JSON one-shot modes (`-p`) exit when the main run ends, so background children and their results are lost. They need a way to wait for children (a `wait` tool or a drain-on-exit step) before `task` is useful there.
+- Print and JSON one-shot modes (`-p`) exited when the main run ended, losing background children and their results. Fixed after phase 5 (7g).
 - The result arrives in the main transcript as a plain user message. A message renderer comes with the focus phase.
 - Aborting the main agent (Esc) does not stop its children; use kill. Disposing the main session does.
 - A subagent has no tool to discover its siblings. It learns ids from the spawn result, the incoming message, or its initial prompt (which names its parent).
@@ -323,7 +323,15 @@ Found while porting: two concurrent `spawn`s with the same name got the same id.
 
 Unread reports: a report for main that arrives while the view is on a subagent counts as unread. The hub row shows `✉N` and the agents line names the senders. Returning to main clears the count.
 
-Not done: `agents.*` in the `/settings` menu, and a `wait` for print mode (`-p` still exits before background agents finish).
+Not done: `agents.*` in the `/settings` menu.
+
+## 7g. Print mode waits for its agents (as built)
+
+Problem: `pi -p "delegate this"` ended when main's first run ended. Trace: main calls `task`, the tool returns `Spawned 1 agent`, main replies "spawned it", `prompt()` resolves, print mode prints "spawned it", disposes the session, and the scout is killed mid-run. With several `-p` messages there was a second failure: a report that arrives between two messages starts a main run, and the next `prompt()` (no streaming behaviour) rejects.
+
+Solution: after each prompt, print mode calls `waitForAgentsToSettle(session)` (`settle-agents.ts`). It loops `session.waitForIdle()` and `host.whenQuiet()` until both hold at once, because a report wakes main, and main's new run may spawn more agents. `AgentsHost.whenQuiet()` resolves when no agent (main included) is running and no report is in flight. The in-flight count covers the delivery retries. The quiet check is deferred by a microtask: a child's status turns idle in the same event dispatch that, through a later listener, starts its report, so an immediate check would see nothing in flight and resolve too early. Text mode then prints main's answer to the reports.
+
+Not changed: interactive and RPC modes, which stay up anyway. A subagent that never finishes keeps `-p` running, like a main run that never finishes would.
 
 ## 8. Risks
 

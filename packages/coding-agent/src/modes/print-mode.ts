@@ -8,6 +8,7 @@
 
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
+import { waitForAgentsToSettle } from "../core/agents/settle-agents.ts";
 import { flushRawStdout, waitForRawStdoutBackpressure, writeRawStdout } from "../core/output-guard.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
 import { toJsonEvent } from "./json-event.ts";
@@ -135,12 +136,16 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 		await rebindSession();
 
+		// Each prompt waits for the subagents it started: their reports wake the main agent, and the next prompt
+		// would otherwise collide with that run (or the process would exit and lose them).
 		if (initialMessage) {
 			await session.prompt(initialMessage, { images: initialImages });
+			await waitForAgentsToSettle(session);
 		}
 
 		for (const message of messages) {
 			await session.prompt(message);
+			await waitForAgentsToSettle(session);
 		}
 
 		if (mode === "text") {

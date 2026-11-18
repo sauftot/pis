@@ -406,6 +406,38 @@ describe("AgentsHost", () => {
 		});
 	});
 
+	describe("whenQuiet", () => {
+		it("resolves at once when nothing runs", async () => {
+			const { host } = setup();
+			await expect(host.whenQuiet()).resolves.toBeUndefined();
+		});
+
+		it("waits for a running agent and then for its report to be delivered, retries included", async () => {
+			// The parent refuses twice, so the report is still on its way after the child goes idle.
+			const { host, main, children, spawn } = setup({ holds: ["Alpha"], mainRefusals: 2 });
+			await spawn("Alpha");
+			let quiet = false;
+			const waiting = host.whenQuiet().then(() => {
+				quiet = true;
+			});
+			await vi.waitFor(() => expect(children.get("Alpha")!.prompts).toHaveLength(1));
+			expect(quiet).toBe(false);
+
+			children.get("Alpha")!.release();
+			await waiting;
+			expect(main.attempts).toHaveLength(3);
+			expect(main.accepted).toHaveLength(1);
+		});
+
+		it("resolves when the host shuts down", async () => {
+			const { host, spawn } = setup({ holds: ["Alpha"] });
+			await spawn("Alpha");
+			const waiting = host.whenQuiet();
+			await host.dispose();
+			await expect(waiting).resolves.toBeUndefined();
+		});
+	});
+
 	describe("depth", () => {
 		const names = (tools: ToolDefinition[]) => tools.map((tool) => tool.name);
 

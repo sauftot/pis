@@ -66,3 +66,4 @@ export { type ResolvedChildModel, resolveChildModel } from "./child-model.ts";
 export { createSessionAgents, type SessionAgents } from "./create-agents-host.ts";
 export { Semaphore } from "./semaphore.ts";
 export { getSessionAgentsHost } from "./session-hosts.ts";
+export { waitForAgentsToSettle } from "./settle-agents.ts";
