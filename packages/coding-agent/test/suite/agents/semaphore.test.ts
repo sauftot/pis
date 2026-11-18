@@ -25,6 +25,30 @@ describe("Semaphore", () => {
 		expect(order).toEqual(["first", "second"]);
 	});
 
+	it("starts waiters when the limit rises, and lets holders finish when it falls", async () => {
+		const semaphore = new Semaphore(1);
+		await semaphore.acquire();
+		let started = 0;
+		const waiting = [semaphore.acquire(), semaphore.acquire()].map((p) => p.then(() => started++));
+		semaphore.setLimit(3);
+		await Promise.all(waiting);
+		expect(started).toBe(2);
+
+		// Three held, limit now 1: two releases free nothing, the third makes room for one more.
+		semaphore.setLimit(1);
+		let next = false;
+		void semaphore.acquire().then(() => {
+			next = true;
+		});
+		semaphore.release();
+		semaphore.release();
+		await Promise.resolve();
+		expect(next).toBe(false);
+		semaphore.release();
+		await Promise.resolve();
+		expect(next).toBe(true);
+	});
+
 	it("returns an unused permit to the pool", async () => {
 		const semaphore = new Semaphore(1);
 		await semaphore.acquire();

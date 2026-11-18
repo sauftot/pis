@@ -34,6 +34,7 @@ describe("SettingsSelectorComponent", () => {
 			fullscreenCopyOnSelect: true,
 			fullscreenWheelScrollLines: 7,
 			warnings: {},
+			agents: { enabled: false, idleParkSeconds: 300, maxConcurrency: 4, maxDepth: 1 },
 			defaultModel: "not set",
 			availableDefaultModels: [],
 			availableThinkingLevels: [],
@@ -69,6 +70,7 @@ describe("SettingsSelectorComponent", () => {
 		const config = {
 			sessionShareDestination: "auto",
 			warnings: {},
+			agents: { enabled: false, idleParkSeconds: 300, maxConcurrency: 4, maxDepth: 1 },
 			defaultModel: "not set",
 			availableDefaultModels: [],
 			availableThinkingLevels: [],
@@ -95,6 +97,7 @@ describe("SettingsSelectorComponent", () => {
 			terminalTheme: "dark",
 			availableThemes: ["system", "dark", "light"],
 			warnings: {},
+			agents: { enabled: false, idleParkSeconds: 300, maxConcurrency: 4, maxDepth: 1 },
 		} as unknown as SettingsConfig;
 		const callbacks = { onThemePreview: vi.fn(), onCancel: () => {} } as unknown as SettingsCallbacks;
 		const list = new SettingsSelectorComponent(config, callbacks).getSettingsList();
@@ -122,6 +125,7 @@ describe("SettingsSelectorComponent", () => {
 			terminalTheme: "dark",
 			availableThemes: ["dark", "light", "other"],
 			warnings: {},
+			agents: { enabled: false, idleParkSeconds: 300, maxConcurrency: 4, maxDepth: 1 },
 		} as unknown as SettingsConfig;
 		const callbacks = { onThemePreview: vi.fn(), onCancel: () => {} } as unknown as SettingsCallbacks;
 		const list = new SettingsSelectorComponent(config, callbacks).getSettingsList();
@@ -165,6 +169,48 @@ describe("SettingsSelectorComponent", () => {
 		output = stripAnsi(list.render(120).join("\n"));
 		expect(output).toContain("  ✓ medium");
 		expect(output).toContain("→   high");
+	});
+
+	it("changes subagent settings from the Subagents submenu", () => {
+		const onAgentsSettingChange = vi.fn();
+		const config = {
+			warnings: {},
+			agents: { enabled: false, idleParkSeconds: 300, maxConcurrency: 4, maxDepth: 1 },
+			defaultModel: "not set",
+			availableDefaultModels: [],
+			availableThinkingLevels: [],
+			modelThinkingLevels: {},
+			availableThemes: [],
+			// Rendered next to the Subagents row.
+			treeFilterMode: "default",
+			doubleEscapeAction: "tree",
+			tuiMode: "regular",
+			fullscreenExitOutput: "transcript",
+			fullscreenScrollbar: "auto",
+			defaultProjectTrust: "ask",
+			quietStartup: false,
+		} as unknown as SettingsConfig;
+		const callbacks = { onAgentsSettingChange, onCancel: () => {} } as unknown as SettingsCallbacks;
+		const list = new SettingsSelectorComponent(config, callbacks).getSettingsList();
+		list.selectItem("agents");
+		expect(stripAnsi(list.render(120).join("\n"))).toMatch(/Subagents\s+off/);
+		list.handleInput("\r"); // open the submenu
+		list.handleInput("\r"); // Enabled: false -> true
+		list.handleInput("\x1b[B");
+		list.handleInput("\r"); // Park after: 5 min -> 15 min
+		list.handleInput("\x1b[B");
+		list.handleInput("\r"); // Concurrent runs: 4 -> 8
+		list.handleInput("\x1b[B");
+		list.handleInput("\r"); // Spawn depth: 1 -> 2
+
+		expect(onAgentsSettingChange.mock.calls).toEqual([
+			["enabled", true],
+			["idleParkSeconds", 900],
+			["maxConcurrency", 8],
+			["maxDepth", 2],
+		]);
+		list.handleInput("\x1b"); // close: the row shows the new state
+		expect(stripAnsi(list.render(120).join("\n"))).toMatch(/Subagents\s+on/);
 	});
 
 	it("pages a searchable submenu with selection page keys (#7629)", () => {

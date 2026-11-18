@@ -5202,6 +5202,12 @@ export class InteractiveMode {
 					fullscreenCopyOnSelect: this.settingsManager.getFullscreenCopyOnSelect(),
 					fullscreenWheelScrollLines: this.settingsManager.getFullscreenWheelScrollLines(),
 					warnings: this.settingsManager.getWarnings(),
+					agents: (({ enabled, idleParkMs, maxConcurrency, maxDepth }) => ({
+						enabled,
+						idleParkSeconds: idleParkMs / 1000,
+						maxConcurrency,
+						maxDepth,
+					}))(this.settingsManager.getAgentsSettings()),
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -5381,6 +5387,9 @@ export class InteractiveMode {
 					},
 					onWarningsChange: (warnings) => {
 						this.settingsManager.setWarnings(warnings);
+					},
+					onAgentsSettingChange: (key, value) => {
+						this.settingsManager.setAgentsSetting(key, value);
 					},
 					onCancel: () => {
 						done();

@@ -124,7 +124,7 @@ describe("AgentsHost", () => {
 				context: extra.context,
 				model: extra.model,
 			});
-		return { host, main, children, requests, spawn };
+		return { host, main, children, requests, spawn, settings };
 	}
 
 	describe("spawn and result delivery", () => {
@@ -394,6 +394,20 @@ describe("AgentsHost", () => {
 			expect(children.get("B")!.prompts).toEqual([]);
 
 			await spawn("C");
+			await vi.waitFor(() => expect(children.get("C")!.prompts).toHaveLength(1));
+		});
+
+		it("follows a limit raised in the settings at the next slot handover", async () => {
+			const { children, spawn, settings } = setup({ settings: { maxConcurrency: 1 }, holds: ["A", "B", "C"] });
+			await spawn("A");
+			await spawn("B");
+			await vi.waitFor(() => expect(children.get("A")!.prompts).toHaveLength(1));
+			expect(children.get("B")!.prompts).toEqual([]);
+
+			settings.maxConcurrency = 3;
+			await spawn("C");
+			// The waiting agent starts too, not only the new one.
+			await vi.waitFor(() => expect(children.get("B")!.prompts).toHaveLength(1));
 			await vi.waitFor(() => expect(children.get("C")!.prompts).toHaveLength(1));
 		});
 

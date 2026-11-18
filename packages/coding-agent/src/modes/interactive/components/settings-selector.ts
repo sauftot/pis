@@ -101,6 +101,15 @@ export interface SettingsConfig {
 	fullscreenCopyOnSelect: boolean;
 	fullscreenWheelScrollLines: WheelScrollLines;
 	warnings: WarningSettings;
+	agents: AgentsMenuSettings;
+}
+
+/** The `agents.*` settings the menu can change. */
+export interface AgentsMenuSettings {
+	enabled: boolean;
+	idleParkSeconds: number;
+	maxConcurrency: number;
+	maxDepth: number;
 }
 
 export interface SettingsCallbacks {
@@ -141,6 +150,7 @@ export interface SettingsCallbacks {
 	onFullscreenCopyOnSelectChange: (enabled: boolean) => void;
 	onFullscreenWheelScrollLinesChange: (lines: WheelScrollLines) => void;
 	onWarningsChange: (warnings: WarningSettings) => void;
+	onAgentsSettingChange: <K extends keyof AgentsMenuSettings>(key: K, value: AgentsMenuSettings[K]) => void;
 	onCancel: () => void;
 }
 
@@ -188,6 +198,104 @@ class WarningSettingsSubmenu extends Container {
 	handleInput(data: string): void {
 		this.settingsList.handleInput(data);
 	}
+}
+
+const PARK_CHOICES: ReadonlyArray<{ seconds: number; label: string }> = [
+	{ seconds: 0, label: "never" },
+	{ seconds: 60, label: "1 min" },
+	{ seconds: 300, label: "5 min" },
+	{ seconds: 900, label: "15 min" },
+	{ seconds: 3600, label: "1 hour" },
+];
+
+/** The subagent settings: whether agents exist at all, and how many run, how deep and how long they stay loaded. */
+class AgentsSettingsSubmenu extends Container {
+	private settingsList: SettingsList;
+	private state: AgentsMenuSettings;
+
+	constructor(
+		agents: AgentsMenuSettings,
+		onChange: <K extends keyof AgentsMenuSettings>(key: K, value: AgentsMenuSettings[K]) => void,
+		onDone: (summary: string) => void,
+	) {
+		super();
+		this.state = { ...agents };
+		// A value set in settings.json that is not a menu choice stays selectable.
+		const parkLabel = (seconds: number) =>
+			PARK_CHOICES.find((choice) => choice.seconds === seconds)?.label ?? `${seconds} s`;
+		const numbers = (choices: number[], current: number) =>
+			[...new Set([...choices, current])].sort((a, b) => a - b).map(String);
+
+		const items: SettingItem[] = [
+			{
+				id: "enabled",
+				label: "Enabled",
+				description:
+					"The task and message_agent tools, the agent hub and ctx.agents. Takes effect for the next session (/new, /resume or a restart).",
+				currentValue: String(this.state.enabled),
+				values: ["true", "false"],
+			},
+			{
+				id: "idle-park",
+				label: "Park idle agents after",
+				description:
+					"How long a finished agent stays loaded before it is saved to disk; messaging it loads it again",
+				currentValue: parkLabel(this.state.idleParkSeconds),
+				values: [...new Set([...PARK_CHOICES.map((c) => c.label), parkLabel(this.state.idleParkSeconds)])],
+			},
+			{
+				id: "max-concurrency",
+				label: "Concurrent runs",
+				description: "Subagent runs at once; the rest wait for a slot",
+				currentValue: String(this.state.maxConcurrency),
+				values: numbers([1, 2, 4, 8], this.state.maxConcurrency),
+			},
+			{
+				id: "max-depth",
+				label: "Spawn depth",
+				description: "1: only the main agent spawns. 2: its subagents may spawn too",
+				currentValue: String(this.state.maxDepth),
+				values: numbers([1, 2, 3], this.state.maxDepth),
+			},
+		];
+
+		this.settingsList = new SettingsList(
+			items,
+			items.length,
+			getSettingsListTheme(),
+			(id, newValue) => {
+				switch (id) {
+					case "enabled":
+						this.state.enabled = newValue === "true";
+						onChange("enabled", this.state.enabled);
+						break;
+					case "idle-park":
+						this.state.idleParkSeconds =
+							PARK_CHOICES.find((choice) => choice.label === newValue)?.seconds ?? this.state.idleParkSeconds;
+						onChange("idleParkSeconds", this.state.idleParkSeconds);
+						break;
+					case "max-concurrency":
+						this.state.maxConcurrency = Number.parseInt(newValue, 10);
+						onChange("maxConcurrency", this.state.maxConcurrency);
+						break;
+					case "max-depth":
+						this.state.maxDepth = Number.parseInt(newValue, 10);
+						onChange("maxDepth", this.state.maxDepth);
+						break;
+				}
+			},
+			() => onDone(agentsSummary(this.state)),
+		);
+		this.addChild(this.settingsList);
+	}
+
+	handleInput(data: string): void {
+		this.settingsList.handleInput(data);
+	}
+}
+
+function agentsSummary(agents: AgentsMenuSettings): string {
+	return agents.enabled ? "on" : "off";
 }
 
 const CLEAR_OVERRIDE_VALUE = "__clear__";
@@ -475,6 +583,7 @@ export class SettingsSelectorComponent extends Container {
 		const followUpKey = keyDisplayText("app.message.followUp");
 		const cycleThinkingKey = keyDisplayText("app.thinking.cycle");
 		let currentWarnings = { ...config.warnings };
+		let currentAgents = { ...config.agents };
 		const currentModelThinkingLevels = { ...config.modelThinkingLevels };
 		const defaultModelByValue = new Map(
 			config.availableDefaultModels.map((model) => [modelSettingKey(model), model]),
@@ -612,6 +721,21 @@ export class SettingsSelectorComponent extends Container {
 							callbacks.onWarningsChange(warnings);
 						},
 						() => done(),
+					),
+			},
+			{
+				id: "agents",
+				label: "Subagents",
+				description: "Subagents and their limits. agents.allowedModels is edited in settings.json",
+				currentValue: agentsSummary(currentAgents),
+				submenu: (_currentValue, done) =>
+					new AgentsSettingsSubmenu(
+						currentAgents,
+						(key, value) => {
+							currentAgents = { ...currentAgents, [key]: value };
+							callbacks.onAgentsSettingChange(key, value);
+						},
+						done,
 					),
 			},
 			{

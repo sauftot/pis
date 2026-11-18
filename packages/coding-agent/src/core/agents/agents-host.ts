@@ -321,6 +321,7 @@ export class AgentsHost implements AgentToolsHost {
 	}
 
 	private async runFirstPrompt(ref: AgentRef, session: AgentSessionHandle, prompt: string): Promise<void> {
+		this.syncSlots();
 		await this.slots.acquire();
 		try {
 			// Killed or released while it waited for a slot.
@@ -334,6 +335,7 @@ export class AgentsHost implements AgentToolsHost {
 			}
 		} finally {
 			this.slots.release();
+			this.syncSlots();
 		}
 	}
 
@@ -486,6 +488,11 @@ export class AgentsHost implements AgentToolsHost {
 			// A parent that is compacting or starting cannot take a prompt yet; give it a moment.
 			if (attempt < DELIVERY_ATTEMPTS) await delay(retryMs);
 		}
+	}
+
+	/** Follow `maxConcurrency` when it changes in the settings: read at each slot handover, not only at start. */
+	private syncSlots(): void {
+		this.slots.setLimit(Math.max(1, this.options.settings().maxConcurrency));
 	}
 
 	private depthOf(id: string): number {

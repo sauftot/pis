@@ -111,6 +111,26 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("agents", () => {
+		it("saves one agents setting and keeps the others, including allowedModels", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ agents: { enabled: true, allowedModels: ["haiku"] } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			manager.setAgentsSetting("maxConcurrency", 2);
+			manager.setAgentsSetting("idleParkSeconds", 60);
+			await manager.flush();
+
+			expect(JSON.parse(readFileSync(settingsPath, "utf-8")).agents).toEqual({
+				enabled: true,
+				allowedModels: ["haiku"],
+				maxConcurrency: 2,
+				idleParkSeconds: 60,
+			});
+			expect(manager.getAgentsSettings()).toMatchObject({ maxConcurrency: 2, idleParkMs: 60_000 });
+		});
+	});
+
 	describe("deviceId", () => {
 		it("creates one global device ID and reuses it in later processes", async () => {
 			const settingsPath = join(agentDir, "settings.json");

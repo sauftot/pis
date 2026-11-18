@@ -18,6 +18,8 @@ In `~/.pi/agent/settings.json` (or a project's `.pi/settings.json`):
 | `agents.idleParkSeconds` | `300` | A finished agent is parked to disk after this long. `0` never parks |
 | `agents.allowedModels` | unset | Models the model may choose for a subagent (patterns such as `haiku`). Unset allows any authenticated model; `[]` allows none |
 
+Or use `/settings` → Subagents, which changes all but `allowedModels` in the global settings. Concurrency, depth and park time apply at once. Turning agents on or off takes effect for the next session (`/new`, `/resume` or a restart).
+
 ## Hotkeys
 
 Every key is rebindable in `keybindings.json`; the labels on screen follow your bindings. `/hotkeys` lists them all.

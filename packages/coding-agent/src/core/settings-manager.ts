@@ -942,6 +942,16 @@ export class SettingsManager {
 		};
 	}
 
+	/** Change one `agents.*` setting in the global settings. `allowedModels` is a list and stays in settings.json. */
+	setAgentsSetting<K extends "enabled" | "idleParkSeconds" | "maxConcurrency" | "maxDepth">(
+		key: K,
+		value: NonNullable<NonNullable<Settings["agents"]>[K]>,
+	): void {
+		this.globalSettings.agents = { ...this.globalSettings.agents, [key]: value };
+		this.markModified("agents", key);
+		this.save();
+	}
+
 	getHttpIdleTimeoutMs(): number {
 		return parseTimeoutSetting(this.settings.httpIdleTimeoutMs, "httpIdleTimeoutMs") ?? DEFAULT_HTTP_IDLE_TIMEOUT_MS;
 	}

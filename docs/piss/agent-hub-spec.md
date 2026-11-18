@@ -229,7 +229,7 @@ Known limits:
 - The result arrives in the main transcript as a plain user message. A message renderer comes with the focus phase.
 - Aborting the main agent (Esc) does not stop its children; use kill. Disposing the main session does.
 - A subagent has no tool to discover its siblings. It learns ids from the spawn result, the incoming message, or its initial prompt (which names its parent).
-- `agents.*` do not appear in the `/settings` menu yet.
+- `agents.*` did not appear in the `/settings` menu. Added after phase 5 (7h).
 
 ## 7c. Phase 3 notes (as built)
 
@@ -331,7 +331,13 @@ Problem: `pi -p "delegate this"` ended when main's first run ended. Trace: main 
 
 Solution: after each prompt, print mode calls `waitForAgentsToSettle(session)` (`settle-agents.ts`). It loops `session.waitForIdle()` and `host.whenQuiet()` until both hold at once, because a report wakes main, and main's new run may spawn more agents. `AgentsHost.whenQuiet()` resolves when no agent (main included) is running and no report is in flight. The in-flight count covers the delivery retries. The quiet check is deferred by a microtask: a child's status turns idle in the same event dispatch that, through a later listener, starts its report, so an immediate check would see nothing in flight and resolve too early. Text mode then prints main's answer to the reports.
 
-Not changed: interactive and RPC modes, which stay up anyway. A subagent that never finishes keeps `-p` running, like a main run that never finishes would.
+With agents off, print mode is unchanged: the helper returns at once (upstream's `print-mode.test.ts` drives it with a stub session that has no `waitForIdle`). Not changed: interactive and RPC modes, which stay up anyway. A subagent that never finishes keeps `-p` running, like a main run that never finishes would.
+
+## 7h. Settings menu (as built)
+
+`/settings` → Subagents is a submenu, built like the Warnings one, with Enabled, Park idle agents after (never, 1 min, 5 min, 15 min, 1 hour), Concurrent runs (1, 2, 4, 8) and Spawn depth (1, 2, 3). A value set in `settings.json` that is not a menu choice stays in the cycle. Changes go to the global settings through `SettingsManager.setAgentsSetting`. `allowedModels` is a list and stays in `settings.json`.
+
+Live effect: park time, depth and `allowedModels` were already read on every use. `maxConcurrency` was read once, when the host was built, so `Semaphore` gained `setLimit` and the host re-reads the setting before each acquire and after each release. A higher limit starts queued agents at once; a lower one lets running agents finish. `enabled` decides whether a session gets an agents host at all, so it applies to the next session; the menu text says so.
 
 ## 8. Risks
 
