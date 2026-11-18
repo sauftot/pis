@@ -41,7 +41,17 @@ function focusedLine(rows: readonly RosterRow[], focusedId: string): string {
 		.filter(Boolean)
 		.join("  ");
 	const banner = theme.bold(theme.fg("accent", `▶ viewing ${focusedId}${state}`));
-	return `${banner} ${theme.fg("muted", "— what you type steers this agent")}  ${theme.fg("dim", "│")}  ${hints}`;
+	// Reports waiting in the main conversation matter more than the reminder of what typing does.
+	const waiting = rows.filter((candidate) => (candidate.unread ?? 0) > 0);
+	const total = waiting.reduce((sum, candidate) => sum + (candidate.unread ?? 0), 0);
+	const note =
+		total > 0
+			? theme.fg(
+					"warning",
+					`✉ ${total} unread report${total === 1 ? "" : "s"} for main (${waiting.map((r) => r.id).join(", ")})`,
+				)
+			: theme.fg("muted", "— what you type steers this agent");
+	return `${banner} ${note}  ${theme.fg("dim", "│")}  ${hints}`;
 }
 
 function summary(rows: readonly RosterRow[]): string {

@@ -2,7 +2,7 @@
 
 piss is a fork of pi (`earendil-works/pi`, coding-agent 1.5.x). Goal: manage subagents from inside the chat the way omp (`can1357/oh-my-pi`) does: see them, read them, steer them, kill and revive them, without leaving the session.
 
-Status: phases 1, 2 and 3 implemented (core in `packages/coding-agent/src/core/agents/`, UI in `src/modes/interactive/agents/`; 252 tests in `test/suite/agents/`, including the real InteractiveMode driven on a virtual terminal). Enable with `agents.enabled`. User guide: [agents.md](./agents.md). Phase 4 (activity log, tree/flat, filter, report renderer) is done; phases 5-6 not started.
+Status: phases 1, 2 and 3 implemented (core in `packages/coding-agent/src/core/agents/`, UI in `src/modes/interactive/agents/`; 294 tests in `test/suite/agents/`, including the real InteractiveMode driven on a virtual terminal). Enable with `agents.enabled`. User guide: [agents.md](./agents.md). Phase 4 (activity log, tree/flat, filter, report renderer) is done; phase 5 (extension `ctx.agents`, `ctx.ui.focusAgent`, RPC commands, SDK access, the steerable subagent example) is done; phase 6 not started.
 
 ## 1. Problem
 
@@ -195,7 +195,7 @@ Then port `examples/extensions/subagent` to use it (child steerable, listed in H
 | 2 (done) | `task` tool + `message_agent` tool, persistence under `agents/`, result delivery to parent, concurrency/depth limits | model can spawn 2 agents, message one mid-run, parent gets both results |
 | 3 (done) | Focus controller + `/agents` roster (no overlay yet) + footer indicator | user focuses a running child, steers it, returns to main; no duplicated messages |
 | 4 (done) | Hub overlay P-A then P-B/P-C, keybindings, pinned list | manual QA script in section 9 |
-| 5 | Extension `ctx.agents`, RPC commands, port subagent example, docs | example extension steerable |
+| 5 (done) | Extension `ctx.agents`, RPC commands, port subagent example, docs | example extension steerable |
 | 6 | Optional: worktree isolation, RPC-backed remote agents, click-to-focus, advisor rows | per feature |
 
 ## 7a. Phase 1 notes (as built)
@@ -304,7 +304,26 @@ Reports and messages (`AgentMessageComponent`): the bus writes `Agent "<id>" fin
 
 Found while testing: at a very narrow width a single long hint overflowed, because hints were wrapped between items but never cut; fixed in `wrapHints`.
 
-Not done: mouse support, a persisted log, and an unread marker for reports that arrive while you view another agent.
+Not done: mouse support and a persisted log. The unread marker came with phase 5 (7f).
+
+## 7f. Phase 5 notes (as built)
+
+One API, three ways in. `AgentsApi` (`agents-api.ts`) is the main agent's view of its subagents as plain data: `list`, `get`, `spawn`, `send`, `wait`, `interrupt`, `kill`, `revive`, `messages`, `activity`, `onChange`. Everything runs as `main`.
+- Extensions: `ctx.agents`, plus `ctx.ui.focusAgent(id)` in the interactive UI (rejects in RPC and print modes). With agents off, `ctx.agents` is a disabled API: reads are empty, changes reject with the setting to turn on.
+- RPC: `agents_list`, `agent_spawn`, `agent_send`, `agent_interrupt`, `agent_kill`, `agent_revive`, `agent_get_messages`, `agents_activity`, and `agent_event` lines on stdout (`rpc-agents.ts`, matching `RpcClient` methods).
+- SDK: `getAgentsApi(session)`, exported from the package. Chosen over a `runtime.agents` field so `agent-session-runtime.ts` stays untouched.
+
+`session-hosts.ts` holds the session-to-host map as a leaf module, so `agent-session.ts` and the extension runner can reach the API without importing the code that builds hosts.
+
+`wait(id)` exists for tools that block on their agents. Problem: `spawn` reports asynchronously, so a tool that spawns, waits and returns the report would deliver it twice. Trace: the tool result carries the report, and the host also sends `Agent "x" finished:` to main, which, since main is still running the tool call, is steered in at the next step boundary. Solution: while anyone waits for an agent, a finished run's report goes to the waiters instead of the parent; the activity log records it as `report (to a waiting caller)`. Outcomes are tagged (`finished`, `failed`, `interrupted`, `killed`, `released`). A kill detaches the session before aborting it, so a waiter sees `killed`, not `interrupted`. A wait ended by its signal rejects and the report goes to main as before, so a report always reaches someone. Not offered over RPC: `RpcClient` times requests out after 30 s, and an open request holds off a requested shutdown.
+
+Example port: `examples/extensions/steerable-subagent/` is the `subagent` tool (single, parallel, chain with `{previous}`) on `ctx.agents.spawn` + `wait`, plus `/steer <id>` through `ctx.ui.focusAgent`. Esc on main kills the agents still being waited for (revivable). `examples/extensions/subagent` stays as it is (O4): it works without `agents.enabled`, and replacing it would conflict with upstream. Tested end to end on the faux provider, including a message that steers a child mid-run so that the tool returns the corrected report.
+
+Found while porting: two concurrent `spawn`s with the same name got the same id. The id was allocated before `await createChildSession` and registered after it, so the second registration replaced the first. The `task` tool spawns one at a time, which hid it. `AgentsHost` now reserves the id across the await. Also fixed a flaky ordering in `list()` for agents created in the same millisecond.
+
+Unread reports: a report for main that arrives while the view is on a subagent counts as unread. The hub row shows `✉N` and the agents line names the senders. Returning to main clears the count.
+
+Not done: `agents.*` in the `/settings` menu, and a `wait` for print mode (`-p` still exits before background agents finish).
 
 ## 8. Risks
 

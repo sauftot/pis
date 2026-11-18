@@ -43,6 +43,7 @@ For isolation setup and limitations, see [Run Pi in an isolated environment](../
 | `truncated-tool.ts` | Wraps ripgrep with proper output truncation (50KB/2000 lines) |
 | `ssh.ts` | Delegate all tools to a remote machine via SSH using pluggable operations |
 | `subagent/` | Delegate tasks to specialized subagents with isolated context windows |
+| `steerable-subagent/` | The `subagent` tool on `ctx.agents`: subagents you can view, steer and revive while it waits (needs `agents.enabled`) |
 
 ### Commands & UI
 

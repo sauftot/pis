@@ -29,6 +29,12 @@ import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { toJsonEvent } from "../json-event.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
+import {
+	handleRpcAgentCommand,
+	RPC_AGENT_COMMAND_TYPES,
+	type RpcAgentCommand,
+	subscribeRpcAgents,
+} from "./rpc-agents.ts";
 import type {
 	RpcCommand,
 	RpcExtensionUIRequest,
@@ -56,6 +62,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	let session = runtimeHost.session;
 	let unsubscribe: (() => void) | undefined;
 	let unsubscribeBackpressure: (() => void) | undefined;
+	let unsubscribeAgents: (() => void) | undefined;
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		writeRawStdout(serializeJsonLine(obj));
@@ -312,6 +319,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		setToolsExpanded(_expanded: boolean) {
 			// Tool expansion not supported in RPC mode - no TUI
 		},
+
+		async focusAgent(_id: string) {
+			throw new Error("Viewing an agent needs the interactive UI.");
+		},
 	});
 
 	runtimeHost.setRebindSession(async () => {
@@ -359,6 +370,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
+		unsubscribeAgents?.();
+		unsubscribeAgents = subscribeRpcAgents(session, output);
 		unsubscribe = session.subscribe((event) => {
 			output(toJsonEvent(event));
 			if (event.type === "agent_settled") {
@@ -400,6 +413,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	// Handle a single command
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse | undefined> => {
 		const id = command.id;
+
+		if ((RPC_AGENT_COMMAND_TYPES as readonly string[]).includes(command.type)) {
+			return handleRpcAgentCommand(session, command as RpcAgentCommand);
+		}
 
 		switch (command.type) {
 			// =================================================================
@@ -746,6 +763,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		shuttingDown = true;
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
+		unsubscribeAgents?.();
 		await runtimeHost.dispose();
 		detachInput();
 		process.stdin.pause();

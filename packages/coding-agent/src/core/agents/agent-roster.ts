@@ -18,6 +18,8 @@ export interface RosterRow {
 	createdAt: number;
 	lastActivity: number;
 	sessionFile: string | null;
+	/** Reports from this agent that reached main while the view was elsewhere. Filled in by the UI. */
+	unread?: number;
 }
 
 /**

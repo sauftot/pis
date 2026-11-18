@@ -90,6 +90,13 @@ describe("AgentHubComponent", () => {
 			expect(out).toMatch(/◌ Wren\s+worker\s+parked\s+7m\s+task of Wren/);
 		});
 
+		it("marks an agent whose reports for main were not seen", () => {
+			const { text } = setup([row("Scout", { unread: 2 }), row("Wren")]);
+			const lines = text().split("\n");
+			expect(lines.find((l) => l.includes("Scout"))).toContain("✉2");
+			expect(lines.find((l) => l.includes("Wren"))).not.toContain("✉");
+		});
+
 		it("indents subagents under their parent", () => {
 			const { text } = setup([row("A"), row("A1", { depth: 1, parentId: "A" })]);
 			const lines = text().split("\n");
@@ -345,6 +352,23 @@ describe("formatAgentsLine", () => {
 		const line = plain(formatAgentsLine({ rows: [row("A")], focusedId: undefined, width: 120 }))!;
 		expect(line).toContain("Ctrl+H agent hub");
 		expect(line).not.toContain("next agent");
+	});
+
+	it("shows unread reports for main, and which agents they are from, in place of the steering reminder", () => {
+		const rows = [row("Scout", { status: "running", unread: 2 }), row("Wren", { unread: 1 }), row("Quiet")];
+		const line = plain(formatAgentsLine({ rows, focusedId: "Scout", width: 200 }))!;
+		expect(line).toContain("✉ 3 unread reports for main (Scout, Wren)");
+		expect(line).not.toContain("what you type steers this agent");
+		expect(line).toContain("Alt+M back to main");
+
+		const one = plain(formatAgentsLine({ rows: [row("Scout", { unread: 1 })], focusedId: "Scout", width: 200 }))!;
+		expect(one).toContain("✉ 1 unread report for main (Scout)");
+	});
+
+	it("does not mention unread reports when there are none, and keeps the key hints in a narrow line", () => {
+		expect(plain(formatAgentsLine({ rows: [row("Scout")], focusedId: "Scout", width: 200 }))).not.toContain("unread");
+		const narrow = formatAgentsLine({ rows: [row("Scout", { unread: 4 })], focusedId: "Scout", width: 60 })!;
+		expect(stripAnsi(narrow).length).toBeLessThanOrEqual(60);
 	});
 
 	it("fits the width", () => {

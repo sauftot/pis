@@ -12,6 +12,7 @@ import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
+import type { RpcAgentCommand, RpcAgentResponse } from "./rpc-agents.ts";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -71,7 +72,10 @@ export type RpcCommand =
 	| { id?: string; type: "get_messages" }
 
 	// Commands (available for invocation via prompt)
-	| { id?: string; type: "get_commands" };
+	| { id?: string; type: "get_commands" }
+
+	// Subagents (need `agents.enabled`)
+	| RpcAgentCommand;
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -114,6 +118,7 @@ export interface RpcSessionState {
 
 // Success responses with data
 export type RpcResponse =
+	| RpcAgentResponse
 	// Prompting
 	| { id?: string; type: "response"; command: "prompt"; success: true; data: { disposition: PromptDisposition } }
 	| { id?: string; type: "response"; command: "steer"; success: true; data: { disposition: QueuedInputDisposition } }

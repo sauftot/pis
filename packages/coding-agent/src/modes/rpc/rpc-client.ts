@@ -8,6 +8,9 @@ import { type ChildProcess, spawn } from "node:child_process";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { PromptDisposition, QueuedInputDisposition, SessionStats } from "../../core/agent-session.ts";
+import type { ActivityEntry } from "../../core/agents/agent-activity.ts";
+import type { DeliveryReceipt } from "../../core/agents/agent-types.ts";
+import type { ActivityQuery, AgentSummary, SpawnedAgent, SpawnSpec } from "../../core/agents/agents-api.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
@@ -458,6 +461,58 @@ export class RpcClient {
 	async getCommands(): Promise<RpcSlashCommand[]> {
 		const response = await this.send({ type: "get_commands" });
 		return this.getData<{ commands: RpcSlashCommand[] }>(response).commands;
+	}
+
+	// =========================================================================
+	// Subagents (need `agents.enabled`; changes arrive through onEvent() as `agent_event`)
+	// =========================================================================
+
+	/** Every subagent, oldest first. */
+	async listAgents(): Promise<AgentSummary[]> {
+		const response = await this.send({ type: "agents_list" });
+		return this.getData<{ agents: AgentSummary[] }>(response).agents;
+	}
+
+	/** Start a subagent in the background. Resolves once it exists; its report arrives as a message to the main agent. */
+	async spawnAgent(spec: SpawnSpec): Promise<SpawnedAgent> {
+		const response = await this.send({ type: "agent_spawn", spec });
+		return this.getData<SpawnedAgent>(response);
+	}
+
+	/** Message a subagent as the main agent. */
+	async sendToAgent(to: string, message: string, options?: { interrupt?: boolean }): Promise<DeliveryReceipt> {
+		const response = await this.send({ type: "agent_send", to, message, interrupt: options?.interrupt });
+		return this.getData<{ receipt: DeliveryReceipt }>(response).receipt;
+	}
+
+	/** Abort a subagent's current run. */
+	async interruptAgent(agentId: string): Promise<boolean> {
+		const response = await this.send({ type: "agent_interrupt", agentId });
+		return this.getData<{ interrupted: boolean }>(response).interrupted;
+	}
+
+	/** Abort and release a subagent's session. It can be revived. */
+	async killAgent(agentId: string): Promise<boolean> {
+		const response = await this.send({ type: "agent_kill", agentId });
+		return this.getData<{ killed: boolean }>(response).killed;
+	}
+
+	/** Bring a parked or killed subagent back. */
+	async reviveAgent(agentId: string): Promise<AgentSummary> {
+		const response = await this.send({ type: "agent_revive", agentId });
+		return this.getData<{ agent: AgentSummary }>(response).agent;
+	}
+
+	/** A subagent's conversation so far. */
+	async getAgentMessages(agentId: string): Promise<AgentMessage[]> {
+		const response = await this.send({ type: "agent_get_messages", agentId });
+		return this.getData<{ messages: AgentMessage[] }>(response).messages;
+	}
+
+	/** What the subagents did, oldest first. */
+	async getAgentsActivity(query?: ActivityQuery): Promise<ActivityEntry[]> {
+		const response = await this.send({ type: "agents_activity", ...query });
+		return this.getData<{ entries: ActivityEntry[] }>(response).entries;
 	}
 
 	// =========================================================================

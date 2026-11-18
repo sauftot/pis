@@ -312,6 +312,35 @@ describe("agents in the interactive UI", () => {
 		await waitForNoScreen('No agents match "zzz"');
 	});
 
+	it("flags a report that reaches main while another agent is on screen, and clears it on return", async () => {
+		const { press, type, waitForScreen, waitForNoScreen, screen } = await startWithScout();
+		press(ALT_NEXT);
+		await waitForScreen("▶ viewing Scout");
+		// Main is not on screen, so the report this message makes Scout send to main goes unseen.
+		press(ALT_A);
+		await waitForScreen("Agent hub 1 agent,");
+		press("m");
+		await waitForScreen("Message to Scout");
+		type("steer: from the hub");
+		await waitForScreen("Delivered to Scout");
+		press(ESC);
+
+		await waitForScreen("✉ 1 unread report for main (Scout)");
+		press(ALT_A);
+		await waitForScreen("✉1");
+		press(ESC);
+
+		press(ALT_M);
+		await waitForNoScreen("unread report");
+		await waitForNoScreen("✉");
+		expect(await screen()).toContain("report from Scout");
+	});
+
+	it("does not flag a report that arrives while main is on screen", async () => {
+		const { screen } = await startWithScout();
+		expect(await screen()).not.toContain("✉");
+	});
+
 	it("kills an agent from the hub and shows it as killed", async () => {
 		const { press, waitForScreen } = await startWithScout();
 		press(ALT_A);

@@ -128,6 +128,20 @@ describe("AgentsHost", () => {
 	}
 
 	describe("spawn and result delivery", () => {
+		it("gives concurrent spawns of one name distinct ids", async () => {
+			// Both spawns pick an id before either has built its session and registered.
+			const { spawn, host } = setup();
+			const ids = (await Promise.all([spawn("Alpha"), spawn("Alpha")])).map((spawned) => spawned.id);
+			expect(ids).toEqual(["Alpha", "Alpha2"]);
+			expect(host.registry.list().filter((ref) => ref.kind === "sub")).toHaveLength(2);
+		});
+
+		it("frees the id of a spawn whose session could not be built", async () => {
+			const { spawn } = setup({ refuseModels: ["nope"] });
+			await expect(spawn("Alpha", { model: "nope" })).rejects.toThrow('Model "nope" not found.');
+			expect((await spawn("Alpha")).id).toBe("Alpha");
+		});
+
 		it("starts the agent in the background and delivers its report to the spawner", async () => {
 			const { host, main, children, spawn } = setup();
 			const result = await spawn("Alpha", { task: "look at auth", context: "repo uses JWT" });
@@ -166,7 +180,7 @@ describe("AgentsHost", () => {
 			const { main, spawn } = setup({ failFirst: { Alpha: "boom" } });
 			await spawn("Alpha");
 			await vi.waitFor(() => expect(main.accepted).toHaveLength(1));
-			expect(main.accepted[0]).toBe('Agent "Alpha" finished:\n\nFailed to run: boom');
+			expect(main.accepted[0]).toBe('Agent "Alpha" finished:\n\nFailed: could not start: boom');
 		});
 
 		it("retries delivery while the spawner cannot take a prompt yet", async () => {
@@ -294,6 +308,24 @@ describe("AgentsHost", () => {
 			const errors = texts(host, "error");
 			expect(errors).toHaveLength(4);
 			expect(errors[0]).toContain("Alpha: Alpha → main: not delivered: Cannot submit a prompt");
+		});
+	});
+
+	describe("delivery listeners", () => {
+		it("tells listeners about each message and its receipt, failed ones too, until they unsubscribe", async () => {
+			const { host, main, spawn } = setup();
+			const seen: string[] = [];
+			const off = host.onDelivery((envelope, receipt) =>
+				seen.push(`${envelope.from}>${envelope.to}:${envelope.kind ?? "message"}:${receipt.outcome}`),
+			);
+			await spawn("Alpha");
+			await vi.waitFor(() => expect(main.accepted).toHaveLength(1));
+			await host.bus.send({ from: "main", to: "ghost", body: "hi" });
+			expect(seen).toEqual(["Alpha>main:result:injected", "main>ghost:message:failed"]);
+
+			off();
+			await host.bus.send({ from: "main", to: "ghost", body: "again" });
+			expect(seen).toHaveLength(2);
 		});
 	});
 

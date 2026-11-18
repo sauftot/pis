@@ -58,6 +58,7 @@ import type {
 } from "@earendil-works/pi-tui";
 import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
+import type { AgentsApi } from "../agents/agents-api.ts";
 import type { BashResult } from "../bash-executor.ts";
 import type { CacheWarmingDecisionEvent, CacheWarmingDecisionEventResult } from "../cache-warmer.ts";
 import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
@@ -318,6 +319,12 @@ export interface ExtensionUIContext {
 
 	/** Set tool output expansion state. */
 	setToolsExpanded(expanded: boolean): void;
+
+	/**
+	 * Show a subagent's live transcript in the chat and send what the user types to it, as the agent hub does.
+	 * A parked or killed agent is revived first. Rejects outside the interactive UI, or for an unknown agent.
+	 */
+	focusAgent(id: string): Promise<void>;
 }
 
 // ============================================================================
@@ -383,6 +390,12 @@ export interface ExtensionContext {
 	compact(options?: CompactOptions): void;
 	/** Get the current effective system prompt. */
 	getSystemPrompt(): string;
+	/**
+	 * The session's subagents: list, start, message, interrupt, kill and revive them, read what they did, and be told
+	 * when they change. `agents.enabled` must be set; otherwise reads are empty and changes reject. Everything runs as
+	 * the main agent, so a started agent reports back to the main conversation.
+	 */
+	readonly agents: AgentsApi;
 }
 
 /** Options for {@link ExtensionToolContext.executeTool}. */
@@ -2269,6 +2282,8 @@ export interface ExtensionContextActions {
 	getContextUsage: () => ContextUsage | undefined;
 	compact: (options?: CompactOptions) => void;
 	getSystemPrompt: () => string;
+	/** Backs `ctx.agents`. Without it, agents look disabled to extensions. */
+	getAgents?: () => AgentsApi;
 	getSystemPromptOptions?: () => BuildSystemPromptOptions;
 	/** Backs `ExtensionToolContext.executeTool()`. Without it, nested calls fail. */
 	executeTool?: (

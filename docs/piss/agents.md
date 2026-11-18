@@ -71,6 +71,8 @@ While you view an agent, the editor border changes colour and the line becomes a
 ▶ viewing Scout (running) — what you type steers this agent  │  Alt+M back to main  Alt+A agent hub  Escape interrupt
 ```
 
+A report that reaches the main conversation while you view a subagent is unread until you go back to main. The line then says `✉ 1 unread report for main (Wren)` instead of the reminder, and the agent's hub row shows `✉1`.
+
 ## The activity log
 
 Press `Tab` in the hub. It lists, newest last, what the agents did:
@@ -129,7 +131,7 @@ Messaging from the hub (`M`) is the quick way to nudge an agent when you do not 
 | idle | It starts working on it |
 | parked or killed | Revived from its transcript with full history, then delivered |
 
-Everything you type to an agent, and its replies, is saved in its own transcript under the session's `agents/` directory. A finished run's report is also sent to the agent that spawned it, even when you were the one who steered it.
+Everything you type to an agent, and its replies, is saved in its own transcript under the session's `agents/` directory. A finished run's report is also sent to the agent that spawned it, even when you were the one who steered it. The one exception: when a tool waits for the agent (an extension using `ctx.agents.wait`), the report becomes that tool's result instead, so it is not delivered twice.
 
 ## Choosing the subagent's model
 
@@ -170,6 +172,7 @@ You are a scout. Investigate quickly and report findings another agent can use.
 
 - One-shot modes (`-p`, JSON) exit when the main run ends, so background agents and their reports are lost there. Use the interactive UI or RPC mode.
 - Aborting the main agent does not stop its subagents. Kill them, or close the session.
+- Extensions reach agents through `ctx.agents`, RPC clients through the `agent_*` commands, and SDK code through `getAgentsApi(session)`; see the extension, RPC and SDK docs. [`examples/extensions/steerable-subagent`](../../packages/coding-agent/examples/extensions/steerable-subagent/) is a `subagent` tool built on it.
 - Subagents run without extensions, skills and MCP tools.
 - With `--no-session` agents live in memory only and are never parked, so they cannot be revived after a kill.
 - The activity log is in memory only.

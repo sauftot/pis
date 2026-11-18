@@ -18,6 +18,8 @@ export async function bootAgentsRuntime(options: {
 	agentsEnabled: boolean;
 	tokensPerSecond?: number;
 	allowedModels?: string[];
+	/** More extensions to load into the main session, such as an example under test. */
+	extensions?: Array<(pi: ExtensionAPI) => void>;
 }) {
 	const tempDir = mkdtempSync(join(tmpdir(), "piss-e2e-"));
 	mkdirSync(join(tempDir, "sessions"), { recursive: true });
@@ -54,6 +56,7 @@ export async function bootAgentsRuntime(options: {
 							})),
 						});
 					},
+					...(options.extensions ?? []),
 				],
 				noSkills: true,
 				noPromptTemplates: true,

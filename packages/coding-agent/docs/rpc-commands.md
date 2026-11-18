@@ -783,6 +783,29 @@ Response:
 
 The current session name is available via `get_state` in the `sessionName` field. To set the initial name when starting RPC mode, pass `--name <name>` or `-n <name>` to the `pi --mode rpc` process.
 
+## Subagents
+
+These commands need `agents.enabled`; without it `agents_list` returns an empty list and the others fail with an error response. They are the same surface as `ctx.agents` in extensions, all acting as the main agent.
+
+| Command | Fields | Response `data` |
+|---|---|---|
+| `agents_list` | | `{agents: AgentSummary[]}` |
+| `agent_spawn` | `spec: {task, name?, agent?, model?, context?}` | `{id, agent, model}` |
+| `agent_send` | `to`, `message`, `interrupt?` | `{receipt}` |
+| `agent_interrupt` | `agentId` | `{interrupted}` |
+| `agent_kill` | `agentId` | `{killed}` |
+| `agent_revive` | `agentId` | `{agent}` |
+| `agent_get_messages` | `agentId` | `{messages}` |
+| `agents_activity` | `agentId?`, `kind?`, `limit?` | `{entries}` |
+
+Changes are pushed on stdout as events, alongside the session events:
+
+```json
+{"type": "agent_event", "change": "status_changed", "agent": {"id": "Scout", "status": "idle", "...": "..."}, "previous": "running"}
+```
+
+`change` is `registered`, `status_changed`, `updated`, `removed` (each with `agent`) or `activity` (with `entry`). There is no command for `ctx.agents.wait`: a request that stays open for a whole run would hit `RpcClient`'s 30 second request timeout and hold off a requested shutdown. Watch for a `status_changed` event to `idle` instead; the report reaches the main agent as a message. `RpcClient` has matching methods: `listAgents`, `spawnAgent`, `sendToAgent`, `interruptAgent`, `killAgent`, `reviveAgent`, `getAgentMessages`, `getAgentsActivity`.
+
 ## Discoverable commands
 
 ### get_commands

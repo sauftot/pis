@@ -9,18 +9,12 @@ import { type AgentDefinition, discoverAgentDefinitions } from "./agent-definiti
 import { AgentStore } from "./agent-store.ts";
 import { AgentsHost } from "./agents-host.ts";
 import { createChildSessionFactory } from "./child-session-factory.ts";
+import { setSessionAgentsHost } from "./session-hosts.ts";
 
 export interface SessionAgents {
 	host: AgentsHost;
 	/** Call once the top-level session exists: registers it as `main`, restores saved agents, and ties teardown to its disposal. */
 	bindMain(session: AgentSession): void;
-}
-
-const hostsBySession = new WeakMap<AgentSession, AgentsHost>();
-
-/** The agents host of a top-level session, or undefined when agents are disabled for it. */
-export function getSessionAgentsHost(session: AgentSession): AgentsHost | undefined {
-	return hostsBySession.get(session);
 }
 
 export function createSessionAgents(services: AgentSessionServices, sessionManager: SessionManager): SessionAgents {
@@ -46,7 +40,7 @@ export function createSessionAgents(services: AgentSessionServices, sessionManag
 		host,
 		bindMain(session) {
 			main = session;
-			hostsBySession.set(session, host);
+			setSessionAgentsHost(session, host);
 			host.attachMain(session);
 			host.restorePersisted();
 			session.addDisposeListener(() => void host.dispose());

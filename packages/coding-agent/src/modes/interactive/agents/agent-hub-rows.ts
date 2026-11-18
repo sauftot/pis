@@ -43,6 +43,8 @@ export function rosterRowLines(input: {
 			theme.fg("dim", pad(row.agent ?? "", typeWidth)),
 			colored(row.status, pad(row.status, 7)),
 			theme.fg("dim", pad(formatAge(now - row.lastActivity), 4, "right")),
+			// A report for main that the user has not seen because the view was elsewhere.
+			(row.unread ?? 0) > 0 ? theme.fg("warning", pad(`✉${row.unread}`, 3)) : "   ",
 			row.activity ? theme.fg("warning", text) : theme.fg("muted", text),
 		];
 		const line = ` ${cells.join(" ")}`;

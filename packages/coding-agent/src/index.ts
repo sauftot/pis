@@ -23,6 +23,18 @@ export {
 	parseSkillBlock,
 	type SessionStats,
 } from "./core/agent-session.ts";
+// Subagents, as extensions see them through ctx.agents
+export type { ActivityEntry, ActivityKind, ActivityKindFilter } from "./core/agents/agent-activity.ts";
+export type { AgentStatus, DeliveryReceipt, RunOutcome } from "./core/agents/agent-types.ts";
+export type {
+	ActivityQuery,
+	AgentApiEvent,
+	AgentSummary,
+	AgentsApi,
+	SpawnedAgent,
+	SpawnSpec,
+} from "./core/agents/agents-api.ts";
+export { getAgentsApi } from "./core/agents/agents-api.ts";
 export { readStoredCredential } from "./core/auth-storage.ts";
 export type { CacheWarmingDecision, CacheWarmingStatus } from "./core/cache-warmer.ts";
 // Compaction

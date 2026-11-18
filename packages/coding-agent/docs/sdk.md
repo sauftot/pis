@@ -93,6 +93,18 @@ Session events report message updates, tool execution, queues, compaction, retri
 
 Use `agent_settled` when the host needs to know that Pi will not continue automatically.
 
+## Subagents
+
+With `agents.enabled` in the settings, every top-level session owns its subagents. `getAgentsApi(session)` returns the same API extensions get as `ctx.agents` (see [extensions](extensions.md#ctxagents)): list, spawn, message, wait for, interrupt, kill and revive agents, and subscribe to their changes. It acts as the main agent. Call it again after a runtime replacement: the new session has its own agents.
+
+```typescript
+import { getAgentsApi } from "@earendil-works/pi-coding-agent";
+
+const agents = getAgentsApi(runtime.session);
+const { id } = await agents.spawn({ name: "Scout", task: "list the entry points" });
+const outcome = await agents.wait(id); // { status: "finished", report } and the report is not sent to main
+```
+
 ## Configuring a session
 
 Without overrides, the factory creates a `ModelRuntime`, file-backed `SettingsManager`, persistent `SessionManager`, `DefaultResourceLoader`, and the configured default tools.

@@ -1317,6 +1317,27 @@ pi.on("before_agent_start", (event, ctx) => {
 });
 ```
 
+### ctx.agents
+
+The session's subagents, as the main agent sees them. Requires `agents.enabled`; otherwise reads are empty (`ctx.agents.enabled` is `false`) and anything that changes something rejects.
+
+```typescript
+const agents = ctx.agents;
+agents.list();                                   // AgentSummary[], oldest first (plain data, JSON-safe)
+agents.get("Scout");                             // AgentSummary | undefined
+const { id } = await agents.spawn({ name: "Scout", task: "map src/auth", agent: "scout", model: "haiku" });
+await agents.send(id, "ignore the legacy module", { interrupt: true });   // DeliveryReceipt; revives a parked agent
+const outcome = await agents.wait(id, { signal });   // RunOutcome: finished | failed | interrupted | killed | released
+await agents.interrupt(id);                      // abort the current run, keep context
+await agents.kill(id);                           // release the session; revivable
+await agents.revive(id);                         // AgentSummary
+await agents.messages(id);                       // AgentMessage[]; reads the saved transcript if parked
+agents.activity({ agentId: id, kind: "tools", limit: 20 });
+const stop = agents.onChange((event) => {});     // registered | status_changed | updated | removed | activity
+```
+
+`spawn` resolves once the agent exists, not when it finishes; its report reaches the main conversation as a message. `wait` resolves when the agent's run in progress (or its next run) ends, and takes the report: it is returned to the waiter and not also sent to main, so a tool that waits for its agents gets each report exactly once. A wait ended by `signal` rejects, and the report then goes to main as usual. [`examples/extensions/steerable-subagent`](../examples/extensions/steerable-subagent/) is a `subagent` tool built this way. In the interactive UI, `ctx.ui.focusAgent(id)` shows an agent's live transcript and routes typing to it, like the agent hub (rejects in RPC and print modes).
+
 ## ExtensionCommandContext
 
 Command handlers receive `ExtensionCommandContext`, which extends `ExtensionContext` with session control methods. These are only available in commands because they can deadlock if called from event handlers.

@@ -72,9 +72,11 @@ import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-ser
 import {
 	type AgentsHost,
 	buildRoster,
+	getAgentsApi,
 	getSessionAgentsHost,
 	MAIN_AGENT_ID,
 	parseEnvelope,
+	type RosterRow,
 } from "../../core/agents/index.ts";
 import {
 	CACHE_TTL_MS,
@@ -633,6 +635,8 @@ export class InteractiveMode {
 	/** Decides whether the view shows the main agent or one subagent. */
 	private agentFocus: AgentFocusController | undefined;
 	private unwatchAgents: (() => void) | undefined;
+	/** Reports that reached the main agent while the view was on a subagent, by sender. Cleared on return to main. */
+	private readonly unreadReports = new Map<string, number>();
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -2443,6 +2447,7 @@ export class InteractiveMode {
 				})();
 			},
 			getSystemPrompt: () => this.session.systemPrompt,
+			agents: getAgentsApi(this.runtimeHost.session),
 		});
 
 		// Set up the extension shortcut handler on the default editor
@@ -2848,6 +2853,7 @@ export class InteractiveMode {
 			},
 			getToolsExpanded: () => this.toolOutputExpanded,
 			setToolsExpanded: (expanded) => this.setToolsExpanded(expanded),
+			focusAgent: (id) => this.agentFocus?.focus(id) ?? Promise.reject(new Error("Agents are not available.")),
 		};
 	}
 
@@ -5424,6 +5430,8 @@ export class InteractiveMode {
 	 * with the main session.
 	 */
 	private retargetView(): void {
+		// Back on the main agent, its transcript shows every report, so none are unread any more.
+		if (this.agentFocus?.focusedId === undefined) this.unreadReports.clear();
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.clearStatusIndicator();
@@ -5453,7 +5461,7 @@ export class InteractiveMode {
 		const host = getSessionAgentsHost(this.runtimeHost.session);
 		if (!host) return undefined;
 		return formatAgentsLine({
-			rows: buildRoster(host.registry, (id) => host.describe(id)),
+			rows: this.rosterRows(host),
 			focusedId: this.agentFocus?.focusedId,
 			width,
 		});
@@ -5462,9 +5470,32 @@ export class InteractiveMode {
 	/** Redraw when agents change state, so the agents line and an open hub stay current. */
 	private watchAgents(): void {
 		this.unwatchAgents?.();
-		this.unwatchAgents = getSessionAgentsHost(this.runtimeHost.session)?.registry.onChange(() =>
-			this.ui.requestRender(),
-		);
+		this.unreadReports.clear();
+		const host = getSessionAgentsHost(this.runtimeHost.session);
+		if (!host) {
+			this.unwatchAgents = undefined;
+			return;
+		}
+		const stopRegistry = host.registry.onChange(() => this.ui.requestRender());
+		// A report for main is only unseen while the view is on a subagent; the main transcript shows it otherwise.
+		const stopDelivery = host.onDelivery((envelope, receipt) => {
+			if (envelope.kind !== "result" || envelope.to !== MAIN_AGENT_ID || receipt.outcome === "failed") return;
+			if (this.agentFocus?.focusedId === undefined) return;
+			this.unreadReports.set(envelope.from, (this.unreadReports.get(envelope.from) ?? 0) + 1);
+			this.ui.requestRender();
+		});
+		this.unwatchAgents = () => {
+			stopRegistry();
+			stopDelivery();
+		};
+	}
+
+	/** Roster rows with the unread reports of each agent. */
+	private rosterRows(host: AgentsHost): RosterRow[] {
+		return buildRoster(host.registry, (id) => host.describe(id)).map((row) => ({
+			...row,
+			unread: this.unreadReports.get(row.id) ?? 0,
+		}));
 	}
 
 	private returnToMainAgent(): void {
@@ -5516,7 +5547,7 @@ export class InteractiveMode {
 		}
 		this.showSelector((done) => {
 			const hub = new AgentHubComponent({
-				getRows: () => buildRoster(host.registry, (id) => host.describe(id)),
+				getRows: () => this.rosterRows(host),
 				getActivity: () => host.activity.entries(),
 				getMainStatus: () => host.registry.get(MAIN_AGENT_ID)?.status,
 				getFocusedId: () => this.agentFocus?.focusedId,

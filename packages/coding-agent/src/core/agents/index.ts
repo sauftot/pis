@@ -10,6 +10,7 @@ export {
 	gist,
 	summarizeToolArgs,
 } from "./agent-activity.ts";
+export type { DeliveryListener } from "./agent-bus.ts";
 export { AgentBus, deliverAgentMessage } from "./agent-bus.ts";
 export { type AgentDefinition, DEFAULT_AGENT_NAME, discoverAgentDefinitions } from "./agent-definitions.ts";
 export { formatEnvelope, type ParsedEnvelope, parseEnvelope } from "./agent-envelope.ts";
@@ -39,7 +40,19 @@ export type {
 	RegisterInput,
 	RegistryEvent,
 	RegistryListener,
+	RunOutcome,
 } from "./agent-types.ts";
+export {
+	type ActivityQuery,
+	type AgentApiEvent,
+	type AgentSummary,
+	type AgentsApi,
+	createAgentsApi,
+	disabledAgentsApi,
+	getAgentsApi,
+	type SpawnedAgent,
+	type SpawnSpec,
+} from "./agents-api.ts";
 export {
 	type AgentInfo,
 	AgentsHost,
@@ -50,5 +63,6 @@ export {
 	MAIN_AGENT_ID,
 } from "./agents-host.ts";
 export { type ResolvedChildModel, resolveChildModel } from "./child-model.ts";
-export { createSessionAgents, getSessionAgentsHost, type SessionAgents } from "./create-agents-host.ts";
+export { createSessionAgents, type SessionAgents } from "./create-agents-host.ts";
 export { Semaphore } from "./semaphore.ts";
+export { getSessionAgentsHost } from "./session-hosts.ts";

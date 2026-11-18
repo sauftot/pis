@@ -3,6 +3,9 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AgentSessionEvent, PromptOptions } from "../agent-session.ts";
 
+/** The id of the top-level agent every subagent reports to. */
+export const MAIN_AGENT_ID = "main";
+
 /** Lifecycle state of an agent. `parked` and `aborted` agents have no live session but can be revived. */
 export type AgentStatus = "running" | "idle" | "parked" | "aborted";
 
@@ -70,6 +73,14 @@ export interface AgentEnvelope {
 	/** When the recipient is running: false queues the message as a follow-up instead of steering. Default true. */
 	interrupt?: boolean;
 }
+
+/** How an agent's run ended, as told to a caller that waited for it. Plain data. */
+export type RunOutcome =
+	| { status: "finished"; report: string }
+	| { status: "failed"; error: string }
+	| { status: "interrupted" }
+	| { status: "killed" }
+	| { status: "released" };
 
 /** How a delivered message reached the recipient's session. */
 export type DeliveryMode = "prompted" | "steered" | "followed-up";

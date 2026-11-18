@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import triggerCompactExtension from "../examples/extensions/trigger-compact.ts";
+import { disabledAgentsApi } from "../src/core/agents/agents-api.ts";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "../src/core/extensions/index.ts";
 
 function createContext(tokens: number | null, compact = vi.fn()): ExtensionContext {
@@ -21,6 +22,7 @@ function createContext(tokens: number | null, compact = vi.fn()): ExtensionConte
 		getContextUsage: () => ({ tokens, contextWindow: 200_000, percent: tokens === null ? null : tokens / 2000 }),
 		compact,
 		getSystemPrompt: () => "",
+		agents: disabledAgentsApi,
 	};
 }
 

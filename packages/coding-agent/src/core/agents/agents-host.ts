@@ -1,10 +1,11 @@
 // The agents host: one per top-level session. It owns the registry, lifecycle and bus, spawns subagents,
-// bounds their concurrency, and delivers each finished run's result to the agent that spawned it.
+// bounds their concurrency, and delivers each finished run's result to the agent that spawned it (or to a caller
+// waiting for that run).
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "../extensions/types.ts";
 import { AgentActivityLog, gist, summarizeToolArgs } from "./agent-activity.ts";
-import { AgentBus } from "./agent-bus.ts";
+import { AgentBus, type DeliveryListener } from "./agent-bus.ts";
 import { type AgentDefinition, DEFAULT_AGENT_NAME } from "./agent-definitions.ts";
 import { AgentLifecycle } from "./agent-lifecycle.ts";
 import { allocateAgentId } from "./agent-names.ts";
@@ -17,17 +18,19 @@ import {
 	type SpawnRequest,
 	type SpawnResult,
 } from "./agent-tools.ts";
-import type {
-	AgentEnvelope,
-	AgentRef,
-	AgentSessionHandle,
-	AgentStatus,
-	DeliveryReceipt,
-	RegistryEvent,
+import {
+	type AgentEnvelope,
+	type AgentRef,
+	type AgentSessionHandle,
+	type AgentStatus,
+	type DeliveryReceipt,
+	MAIN_AGENT_ID,
+	type RegistryEvent,
+	type RunOutcome,
 } from "./agent-types.ts";
 import { Semaphore } from "./semaphore.ts";
 
-export const MAIN_AGENT_ID = "main";
+export { MAIN_AGENT_ID };
 
 export interface AgentsSettings {
 	/** Idle time before a finished agent is parked. <= 0 disables parking. */
@@ -85,6 +88,11 @@ export class AgentsHost implements AgentToolsHost {
 	private readonly info = new Map<string, AgentInfo>();
 	private readonly slots: Semaphore;
 	private readonly unsubscribeRegistry: () => void;
+	private readonly deliveryListeners = new Set<DeliveryListener>();
+	/** Callers waiting for an agent's run to end, by agent id. While any wait, a report goes to them, not the parent. */
+	private readonly waiters = new Map<string, Set<(outcome: RunOutcome) => void>>();
+	/** Ids handed out by spawns still building their session, so concurrent spawns cannot pick the same id. */
+	private readonly reservedIds = new Set<string>();
 	private unsyncMain: (() => void) | undefined;
 	private disposed = false;
 
@@ -99,7 +107,9 @@ export class AgentsHost implements AgentToolsHost {
 		this.unsubscribeRegistry = this.registry.onChange((event) => {
 			if (event.type === "status_changed" && event.ref.status === "aborted") {
 				this.options.store.update(event.ref.id, { killed: true });
+				this.settleWaiters(event.ref.id, { status: "killed" });
 			}
+			if (event.type === "removed") this.settleWaiters(event.ref.id, { status: "released" });
 			this.logRegistryEvent(event);
 		});
 	}
@@ -127,6 +137,33 @@ export class AgentsHost implements AgentToolsHost {
 		if (!session) return false;
 		await session.abort();
 		return true;
+	}
+
+	/**
+	 * Resolve with how the agent's run in progress, or its next run, ends. While anyone waits, a finished run's report
+	 * is handed to the waiters instead of being sent to the agent's parent, so it arrives exactly once. A wait that
+	 * `signal` ends rejects, and the report goes to the parent as usual.
+	 */
+	waitForRun(id: string, signal?: AbortSignal): Promise<RunOutcome> {
+		if (signal?.aborted) return Promise.reject(signal.reason);
+		return new Promise((resolve, reject) => {
+			const waiting = this.waiters.get(id) ?? new Set();
+			this.waiters.set(id, waiting);
+			const stopWaiting = () => {
+				waiting.delete(waiter);
+				if (waiting.size === 0 && this.waiters.get(id) === waiting) this.waiters.delete(id);
+			};
+			const onAbort = () => {
+				stopWaiting();
+				reject(signal?.reason);
+			};
+			const waiter = (outcome: RunOutcome) => {
+				signal?.removeEventListener("abort", onAbort);
+				resolve(outcome);
+			};
+			waiting.add(waiter);
+			signal?.addEventListener("abort", onAbort, { once: true });
+		});
 	}
 
 	/** Models `task` may choose from, or undefined when any authenticated model is allowed. */
@@ -162,15 +199,21 @@ export class AgentsHost implements AgentToolsHost {
 		}
 
 		const id = allocateAgentId(request.name, this.takenIds());
-		const session = await this.options.createChildSession({
-			id,
-			definition,
-			sessionDir: this.options.store.dirFor(id),
-			sessionFile: undefined,
-			customTools: this.customTools(id, callerDepth + 1),
-			model: request.model,
-			restrictModelTo: request.model ? this.allowedModels() : undefined,
-		});
+		this.reservedIds.add(id);
+		let session: AgentSessionHandle;
+		try {
+			session = await this.options.createChildSession({
+				id,
+				definition,
+				sessionDir: this.options.store.dirFor(id),
+				sessionFile: undefined,
+				customTools: this.customTools(id, callerDepth + 1),
+				model: request.model,
+				restrictModelTo: request.model ? this.allowedModels() : undefined,
+			});
+		} finally {
+			this.reservedIds.delete(id);
+		}
 		const ref = this.registry.register({
 			id,
 			displayName: id,
@@ -240,6 +283,8 @@ export class AgentsHost implements AgentToolsHost {
 		this.unsubscribeRegistry();
 		this.unsyncMain?.();
 		await this.lifecycle.dispose();
+		// The registry listener that settles waiters on removal is gone by now.
+		for (const id of [...this.waiters.keys()]) this.settleWaiters(id, { status: "released" });
 	}
 
 	private async revive(stale: AgentRef): Promise<AgentSessionHandle> {
@@ -270,7 +315,8 @@ export class AgentsHost implements AgentToolsHost {
 			await session.prompt(prompt, { source: "extension", expandPromptTemplates: false });
 		} catch (error) {
 			if (this.registry.get(ref.id) === ref && ref.session === session) {
-				await this.sendResult(ref, `Failed to run: ${error instanceof Error ? error.message : String(error)}`);
+				const message = error instanceof Error ? error.message : String(error);
+				await this.report(ref, { status: "failed", error: `could not start: ${message}` });
 			}
 		} finally {
 			this.slots.release();
@@ -299,12 +345,15 @@ export class AgentsHost implements AgentToolsHost {
 					if (event.message.role === "assistant") this.logAssistantMessage(id, event.message);
 					break;
 				case "agent_settled": {
+					const ref = this.registry.get(id);
+					// A kill detaches the session before aborting it; the kill, not this abort, settles the waiters.
+					const attached = ref !== undefined && ref.session === session;
 					if (event.aborted) {
 						this.activity.record({ agentId: id, kind: "lifecycle", text: "run interrupted" });
+						if (attached) this.settleWaiters(id, { status: "interrupted" });
 						break;
 					}
-					const ref = this.registry.get(id);
-					if (ref && ref.session === session) void this.sendResult(ref, finalReport(session));
+					if (attached) void this.report(ref, runOutcome(session));
 					break;
 				}
 				default:
@@ -337,7 +386,14 @@ export class AgentsHost implements AgentToolsHost {
 		}
 	}
 
+	/** Be told about every message the bus handles, delivered or not. Returns the unsubscribe function. */
+	onDelivery(listener: DeliveryListener): () => void {
+		this.deliveryListeners.add(listener);
+		return () => this.deliveryListeners.delete(listener);
+	}
+
 	private logDelivery(envelope: AgentEnvelope, receipt: DeliveryReceipt): void {
+		for (const listener of [...this.deliveryListeners]) listener(envelope, receipt);
 		const { from, to } = envelope;
 		// The log is per subagent, so a message with no subagent at either end (main to an unknown id) has no home.
 		const involved = [to, from].find((id) => this.registry.get(id)?.kind === "sub");
@@ -359,6 +415,29 @@ export class AgentsHost implements AgentToolsHost {
 		});
 	}
 
+	/** Hand a run's outcome to whoever waits for it, or else send it to the agent's parent as a report. */
+	private async report(ref: AgentRef, outcome: Extract<RunOutcome, { status: "finished" | "failed" }>): Promise<void> {
+		const body = outcome.status === "finished" ? outcome.report : `Failed: ${outcome.error}`;
+		if (this.settleWaiters(ref.id, outcome)) {
+			this.activity.record({
+				agentId: ref.id,
+				kind: "message",
+				text: `${ref.id} → ${ref.parentId ?? MAIN_AGENT_ID} report (to a waiting caller): ${gist(body)}`,
+			});
+			return;
+		}
+		await this.sendResult(ref, body);
+	}
+
+	/** Resolve and forget every waiter of `id`. Returns whether there were any. */
+	private settleWaiters(id: string, outcome: RunOutcome): boolean {
+		const waiting = this.waiters.get(id);
+		if (!waiting || waiting.size === 0) return false;
+		this.waiters.delete(id);
+		for (const waiter of waiting) waiter(outcome);
+		return true;
+	}
+
 	private async sendResult(ref: AgentRef, body: string): Promise<void> {
 		if (!ref.parentId || this.disposed) return;
 		const retryMs = this.options.deliveryRetryMs ?? 500;
@@ -378,7 +457,7 @@ export class AgentsHost implements AgentToolsHost {
 	}
 
 	private takenIds(): Set<string> {
-		const taken = new Set<string>([MAIN_AGENT_ID, "all"]);
+		const taken = new Set<string>([MAIN_AGENT_ID, "all", ...this.reservedIds]);
 		for (const ref of this.registry.list()) taken.add(ref.id);
 		for (const meta of this.options.store.list()) taken.add(meta.id);
 		return taken;
@@ -404,17 +483,17 @@ function initialPrompt(id: string, request: SpawnRequest): string {
 	return parts.join("\n\n");
 }
 
-/** The text of the last assistant message of a finished run, or its error. */
-function finalReport(session: AgentSessionHandle): string {
+/** A finished run's outcome: the text of its last assistant message, or its error. */
+function runOutcome(session: AgentSessionHandle): Extract<RunOutcome, { status: "finished" | "failed" }> {
 	const last = session.messages.findLast((message) => message.role === "assistant");
-	if (!last || last.role !== "assistant") return "(no output)";
-	if (last.stopReason === "error") return `Failed: ${last.errorMessage ?? "unknown error"}`;
+	if (!last || last.role !== "assistant") return { status: "finished", report: "(no output)" };
+	if (last.stopReason === "error") return { status: "failed", error: last.errorMessage ?? "unknown error" };
 	const text = last.content
 		.filter((part) => part.type === "text")
 		.map((part) => part.text)
 		.join("\n")
 		.trim();
-	return text.length > 0 ? text : "(no output)";
+	return { status: "finished", report: text.length > 0 ? text : "(no output)" };
 }
 
 function delay(ms: number): Promise<void> {

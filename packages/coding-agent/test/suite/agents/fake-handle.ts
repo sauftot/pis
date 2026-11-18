@@ -24,7 +24,10 @@ export function createFakeHandle(sessionFile: string | null = "/virtual/agent.js
 			listeners.add(listener);
 			return () => listeners.delete(listener);
 		},
-		async prompt() {},
+		// Like a real session, report that the prompt was accepted.
+		async prompt(_text, options) {
+			options?.preflightResult?.("started");
+		},
 		async abort() {
 			handle.aborted = true;
 		},
