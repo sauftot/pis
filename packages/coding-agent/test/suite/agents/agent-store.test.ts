@@ -22,7 +22,7 @@ describe("AgentStore", () => {
 		for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 	});
 	const newRoot = () => {
-		const dir = mkdtempSync(join(tmpdir(), "piss-store-"));
+		const dir = mkdtempSync(join(tmpdir(), "pis-store-"));
 		dirs.push(dir);
 		return join(dir, "agents");
 	};

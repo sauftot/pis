@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { detectCapabilities, getTerminalColorMode, type TerminalColorMode } from "@earendil-works/pi-tui";
 import chalk from "chalk";
-import { APP_NAME, CONFIG_DIR_NAME } from "../config.ts";
+import { APP_NAME, getAgentDirLayers, getProjectConfigDirs } from "../config.ts";
 import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.ts";
 import type { ResourceDiagnostic } from "./diagnostics.ts";
 
@@ -267,7 +267,11 @@ export function loadProjectContextFiles(options: {
 	const contextFiles: Array<{ path: string; content: string }> = [];
 	const seenPaths = new Set<string>();
 
-	const globalContext = loadContextFileFromDir(resolvedAgentDir);
+	// The first agent dir layer with a context file: pis's own, else pi's.
+	const globalContext =
+		getAgentDirLayers(resolvedAgentDir)
+			.map((dir) => loadContextFileFromDir(dir))
+			.find((file) => file !== null) ?? null;
 	if (globalContext) {
 		contextFiles.push(globalContext);
 		seenPaths.add(globalContext.path);
@@ -1019,18 +1023,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 		}
 
 		const normalizedPath = resolve(filePath);
-		const agentRoots = [
-			join(this.agentDir, "skills"),
-			join(this.agentDir, "prompts"),
-			join(this.agentDir, "themes"),
-			join(this.agentDir, "extensions"),
-		];
-		const projectRoots = [
-			join(this.cwd, CONFIG_DIR_NAME, "skills"),
-			join(this.cwd, CONFIG_DIR_NAME, "prompts"),
-			join(this.cwd, CONFIG_DIR_NAME, "themes"),
-			join(this.cwd, CONFIG_DIR_NAME, "extensions"),
-		];
+		const resourceRoots = (dirs: string[]) =>
+			dirs.flatMap((dir) => ["skills", "prompts", "themes", "extensions"].map((type) => join(dir, type)));
+		const agentRoots = resourceRoots(getAgentDirLayers(this.agentDir));
+		const projectRoots = resourceRoots(getProjectConfigDirs(this.cwd));
 
 		for (const root of agentRoots) {
 			if (this.isUnderPath(normalizedPath, root)) {
@@ -1083,7 +1079,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const themes: Theme[] = [];
 		const diagnostics: ResourceDiagnostic[] = [];
 		if (includeDefaults) {
-			const defaultDirs = [join(this.agentDir, "themes"), join(this.cwd, CONFIG_DIR_NAME, "themes")];
+			const defaultDirs = [...getAgentDirLayers(this.agentDir), ...getProjectConfigDirs(this.cwd)].map((dir) =>
+				join(dir, "themes"),
+			);
 
 			for (const dir of defaultDirs) {
 				this.loadThemesFromDir(dir, themes, diagnostics, colorMode);
@@ -1243,31 +1241,19 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	private discoverSystemPromptFile(): string | undefined {
-		const projectPath = join(this.cwd, CONFIG_DIR_NAME, "SYSTEM.md");
-		if (this.settingsManager.isProjectTrusted() && existsSync(projectPath)) {
-			return projectPath;
-		}
-
-		const globalPath = join(this.agentDir, "SYSTEM.md");
-		if (existsSync(globalPath)) {
-			return globalPath;
-		}
-
-		return undefined;
+		return this.discoverPromptFile("SYSTEM.md");
 	}
 
 	private discoverAppendSystemPromptFile(): string | undefined {
-		const projectPath = join(this.cwd, CONFIG_DIR_NAME, "APPEND_SYSTEM.md");
-		if (this.settingsManager.isProjectTrusted() && existsSync(projectPath)) {
-			return projectPath;
-		}
+		return this.discoverPromptFile("APPEND_SYSTEM.md");
+	}
 
-		const globalPath = join(this.agentDir, "APPEND_SYSTEM.md");
-		if (existsSync(globalPath)) {
-			return globalPath;
-		}
-
-		return undefined;
+	/** The first `name` in the trusted project's config dirs, then in the agent dirs; pis's own before pi's. */
+	private discoverPromptFile(name: string): string | undefined {
+		const projectDirs = this.settingsManager.isProjectTrusted() ? getProjectConfigDirs(this.cwd) : [];
+		return [...projectDirs, ...getAgentDirLayers(this.agentDir)]
+			.map((dir) => join(dir, name))
+			.find((path) => existsSync(path));
 	}
 
 	private isUnderPath(target: string, root: string): boolean {

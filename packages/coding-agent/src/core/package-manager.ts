@@ -38,7 +38,7 @@ import type { Readable } from "node:stream";
 import ignore from "ignore";
 import { minimatch } from "minimatch";
 import { gt, maxSatisfying, rcompare, satisfies, valid, validRange } from "semver";
-import { CONFIG_DIR_NAME } from "../config.ts";
+import { CONFIG_DIR_NAME, getAgentDirLayers, getBaseAgentDir, getProjectConfigDirs } from "../config.ts";
 import { spawnProcess, spawnProcessSync } from "../utils/child-process.ts";
 import { type GitSource, parseGitUrl } from "../utils/git.ts";
 import {
@@ -1500,7 +1500,10 @@ export class DefaultPackageManager implements PackageManager {
 			}
 
 			if (parsed.type === "git") {
-				const installedPath = this.getGitInstallPath(parsed, resolvedScope);
+				const ownPath = this.getGitInstallPath(parsed, resolvedScope);
+				const installedPath = existsSync(ownPath)
+					? ownPath
+					: (this.getBaseGitInstallPath(parsed, resolvedScope) ?? ownPath);
 				if (!existsSync(installedPath)) {
 					const installed = await installMissing();
 					if (!installed) continue;
@@ -2344,11 +2347,35 @@ export class DefaultPackageManager implements PackageManager {
 
 	private getNpmInstallPath(source: NpmSource, scope: SourceScope): string {
 		const managedPath = this.getManagedNpmInstallPath(source, scope);
-		if (scope !== "user" || existsSync(managedPath)) {
+		if (existsSync(managedPath)) {
+			return managedPath;
+		}
+		// Installed by pi but not yet by pis: load pi's copy. Installs and updates still go to pis's own root.
+		const baseRoot = this.getBaseInstallRoot(scope);
+		const basePath = baseRoot ? join(baseRoot, "npm", "node_modules", source.name) : undefined;
+		if (basePath && existsSync(basePath)) {
+			return basePath;
+		}
+		if (scope !== "user") {
 			return managedPath;
 		}
 		const legacyPath = this.getLegacyGlobalNpmInstallPath(source);
 		return legacyPath && existsSync(legacyPath) ? legacyPath : managedPath;
+	}
+
+	/** Where pi installs packages of this scope, for pis: read only, used when pis has no copy yet. */
+	private getBaseInstallRoot(scope: SourceScope): string | undefined {
+		if (scope === "user") return getBaseAgentDir(this.agentDir);
+		if (scope === "project") return getProjectConfigDirs(this.cwd)[1];
+		return undefined;
+	}
+
+	/** pi's checkout of a git package when pis has none, so loading never clones what pi already has. */
+	private getBaseGitInstallPath(source: GitSource, scope: SourceScope): string | undefined {
+		const baseRoot = this.getBaseInstallRoot(scope);
+		if (!baseRoot) return undefined;
+		const path = this.resolveManagedPath(join(baseRoot, "git"), source.host, source.path);
+		return existsSync(path) ? path : undefined;
 	}
 
 	private getGitInstallPath(source: GitSource, scope: SourceScope): string {
@@ -2624,18 +2651,17 @@ export class DefaultPackageManager implements PackageManager {
 		globalBaseDir: string,
 		projectBaseDir: string,
 	): void {
-		const userMetadata: PathMetadata = {
+		// Each scope's config dirs, highest priority first: pis's own, then pi's (read only).
+		const userLayers = getAgentDirLayers(globalBaseDir);
+		const projectLayers = [projectBaseDir, ...getProjectConfigDirs(this.cwd).slice(1)];
+		const metadataFor = (scope: "user" | "project", baseDir: string): PathMetadata => ({
 			source: "auto",
-			scope: "user",
+			scope,
 			origin: "top-level",
-			baseDir: globalBaseDir,
-		};
-		const projectMetadata: PathMetadata = {
-			source: "auto",
-			scope: "project",
-			origin: "top-level",
-			baseDir: projectBaseDir,
-		};
+			baseDir,
+		});
+		const userMetadata = metadataFor("user", globalBaseDir);
+		const projectMetadata = metadataFor("project", projectBaseDir);
 
 		const userOverrides = {
 			extensions: (globalSettings.extensions ?? []) as string[],
@@ -2650,18 +2676,6 @@ export class DefaultPackageManager implements PackageManager {
 			themes: (projectSettings.themes ?? []) as string[],
 		};
 
-		const userDirs = {
-			extensions: join(globalBaseDir, "extensions"),
-			skills: join(globalBaseDir, "skills"),
-			prompts: join(globalBaseDir, "prompts"),
-			themes: join(globalBaseDir, "themes"),
-		};
-		const projectDirs = {
-			extensions: join(projectBaseDir, "extensions"),
-			skills: join(projectBaseDir, "skills"),
-			prompts: join(projectBaseDir, "prompts"),
-			themes: join(projectBaseDir, "themes"),
-		};
 		const userAgentsSkillsDir = join(getHomeDir(), ".agents", "skills");
 		const projectTrusted = this.settingsManager.isProjectTrusted();
 		const projectAgentsSkillDirs = projectTrusted
@@ -2682,23 +2696,34 @@ export class DefaultPackageManager implements PackageManager {
 			}
 		};
 
-		if (projectTrusted) {
-			// Project extensions from .pi/
-			addResources(
-				"extensions",
-				collectAutoExtensionEntries(projectDirs.extensions),
-				projectMetadata,
-				projectOverrides.extensions,
-				projectBaseDir,
-			);
+		/**
+		 * Add one resource type from every layer of a scope. An entry whose path under the type's directory was
+		 * already found in a higher layer is skipped: pis's `extensions/foo.ts` shadows pi's.
+		 */
+		const addLayered = (
+			resourceType: ResourceType,
+			layers: string[],
+			scope: "user" | "project",
+			collect: (dir: string) => string[],
+			overrides: string[],
+		) => {
+			const seen = new Set<string>();
+			for (const layer of layers) {
+				const dir = join(layer, resourceType);
+				const fresh = collect(dir).filter((path) => !seen.has(relative(dir, path)));
+				for (const path of fresh) seen.add(relative(dir, path));
+				addResources(resourceType, fresh, metadataFor(scope, layer), overrides, layer);
+			}
+		};
 
-			// Project skills from .pi/
-			addResources(
+		if (projectTrusted) {
+			addLayered("extensions", projectLayers, "project", collectAutoExtensionEntries, projectOverrides.extensions);
+			addLayered(
 				"skills",
-				collectAutoSkillEntries(projectDirs.skills, "pi"),
-				projectMetadata,
+				projectLayers,
+				"project",
+				(dir) => collectAutoSkillEntries(dir, "pi"),
 				projectOverrides.skills,
-				projectBaseDir,
 			);
 		}
 
@@ -2719,39 +2744,12 @@ export class DefaultPackageManager implements PackageManager {
 		}
 
 		if (projectTrusted) {
-			addResources(
-				"prompts",
-				collectAutoPromptEntries(projectDirs.prompts),
-				projectMetadata,
-				projectOverrides.prompts,
-				projectBaseDir,
-			);
-			addResources(
-				"themes",
-				collectAutoThemeEntries(projectDirs.themes),
-				projectMetadata,
-				projectOverrides.themes,
-				projectBaseDir,
-			);
+			addLayered("prompts", projectLayers, "project", collectAutoPromptEntries, projectOverrides.prompts);
+			addLayered("themes", projectLayers, "project", collectAutoThemeEntries, projectOverrides.themes);
 		}
 
-		// User extensions from ~/.pi/agent/
-		addResources(
-			"extensions",
-			collectAutoExtensionEntries(userDirs.extensions),
-			userMetadata,
-			userOverrides.extensions,
-			globalBaseDir,
-		);
-
-		// User skills from ~/.pi/agent/
-		addResources(
-			"skills",
-			collectAutoSkillEntries(userDirs.skills, "pi"),
-			userMetadata,
-			userOverrides.skills,
-			globalBaseDir,
-		);
+		addLayered("extensions", userLayers, "user", collectAutoExtensionEntries, userOverrides.extensions);
+		addLayered("skills", userLayers, "user", (dir) => collectAutoSkillEntries(dir, "pi"), userOverrides.skills);
 
 		// User skills from ~/.agents/ (with its own baseDir)
 		const userAgentsBaseDir = dirname(userAgentsSkillsDir);
@@ -2767,20 +2765,8 @@ export class DefaultPackageManager implements PackageManager {
 			userAgentsBaseDir,
 		);
 
-		addResources(
-			"prompts",
-			collectAutoPromptEntries(userDirs.prompts),
-			userMetadata,
-			userOverrides.prompts,
-			globalBaseDir,
-		);
-		addResources(
-			"themes",
-			collectAutoThemeEntries(userDirs.themes),
-			userMetadata,
-			userOverrides.themes,
-			globalBaseDir,
-		);
+		addLayered("prompts", userLayers, "user", collectAutoPromptEntries, userOverrides.prompts);
+		addLayered("themes", userLayers, "user", collectAutoThemeEntries, userOverrides.themes);
 	}
 
 	private collectFilesFromPaths(paths: string[], resourceType: ResourceType): string[] {

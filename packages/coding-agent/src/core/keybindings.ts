@@ -9,7 +9,7 @@ import {
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { Compile } from "typebox/compile";
-import { getAgentDir } from "../config.ts";
+import { getAgentDir, getBaseLayerPath } from "../config.ts";
 import { stripBom } from "../utils/text.ts";
 import { KeybindingValueSchema } from "./key-id-schema.ts";
 
@@ -375,7 +375,16 @@ export class KeybindingsManager extends TuiKeybindingsManager {
 		return this.getResolvedBindings();
 	}
 
+	/** The bindings in `path`, over pi's keybindings.json for pis (per action: pis's file wins). */
 	private static loadFromFile(path: string): KeybindingsConfig {
+		const basePath = getBaseLayerPath(path);
+		return {
+			...(basePath ? KeybindingsManager.loadOneFile(basePath) : {}),
+			...KeybindingsManager.loadOneFile(path),
+		};
+	}
+
+	private static loadOneFile(path: string): KeybindingsConfig {
 		const rawConfig = loadRawConfig(path);
 		if (!rawConfig) return {};
 		return toKeybindingsConfig(migrateKeybindingsConfig(rawConfig).config);

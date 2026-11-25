@@ -1,4 +1,4 @@
-// Shared types for the piss agent registry, lifecycle manager and message bus.
+// Shared types for the pis agent registry, lifecycle manager and message bus.
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AgentSessionEvent, PromptOptions } from "../agent-session.ts";

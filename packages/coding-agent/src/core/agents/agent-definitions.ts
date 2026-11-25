@@ -20,10 +20,10 @@ export interface AgentDefinition {
 
 export interface DiscoverAgentDefinitionsOptions {
 	cwd: string;
-	/** `~/.pi/agent/agents`. */
-	userDir: string;
-	/** The project config directory name, such as `.pi`. */
-	configDirName: string;
+	/** User definition dirs, highest priority first: `~/.pis/agent/agents`, then pi's `~/.pi/agent/agents`. */
+	userDirs: string[];
+	/** Project config directory names, highest priority first, such as `.pis` and `.pi`. */
+	configDirNames: string[];
 	/** Whether project-level definitions may load. They carry prompts from the repository, so they need trust. */
 	includeProject: boolean;
 }
@@ -48,10 +48,16 @@ const BUILTIN_WORKER: AgentDefinition = {
 /** Built-in worker, then user definitions, then project definitions; a later definition replaces an earlier one of the same name. */
 export function discoverAgentDefinitions(options: DiscoverAgentDefinitionsOptions): AgentDefinition[] {
 	const byName = new Map<string, AgentDefinition>([[BUILTIN_WORKER.name, BUILTIN_WORKER]]);
-	for (const definition of loadDirectory(options.userDir, "user")) byName.set(definition.name, definition);
-	const projectDir = options.includeProject ? findProjectAgentsDir(options.cwd, options.configDirName) : undefined;
-	if (projectDir)
-		for (const definition of loadDirectory(projectDir, "project")) byName.set(definition.name, definition);
+	// Lowest priority first, so a later directory's definition replaces an earlier one of the same name.
+	for (const dir of [...options.userDirs].reverse())
+		for (const definition of loadDirectory(dir, "user")) byName.set(definition.name, definition);
+	if (options.includeProject) {
+		for (const configDirName of [...options.configDirNames].reverse()) {
+			const projectDir = findProjectAgentsDir(options.cwd, configDirName);
+			if (projectDir)
+				for (const definition of loadDirectory(projectDir, "project")) byName.set(definition.name, definition);
+		}
+	}
 	return [...byName.values()];
 }
 

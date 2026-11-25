@@ -3,9 +3,9 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { ScrollViewScrollbar, TerminalCapabilities, WheelScrollLines } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
+import { dirname, isAbsolute, join, resolve } from "path";
 import lockfile from "proper-lockfile";
-import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
+import { BASE_CONFIG_DIR_NAME, CONFIG_DIR_NAME, getAgentDir, getBaseAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
@@ -146,6 +146,21 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
 	return defaultTools === undefined ? merged : { ...merged, defaultTools };
 }
 
+/** A resource entry (`path`, `+path`, `-path`, `!path`) with a relative path made absolute against `baseDir`. */
+function absolutizeResourceEntry(entry: unknown, baseDir: string): unknown {
+	if (typeof entry !== "string") return entry;
+	const prefix = /^[+\-!]/.test(entry) ? entry[0] : "";
+	const path = entry.slice(prefix.length);
+	// Absolute, home-relative and source-like entries (npm:, git:, builtin:, URLs) already mean the same everywhere.
+	if (path === "" || isAbsolute(path) || path.startsWith("~") || path.includes(":")) return entry;
+	return `${prefix}${resolve(baseDir, path)}`;
+}
+
+/** A local package source (`./pkg`, `../pkg`) made absolute against `baseDir`; other sources are unchanged. */
+function absolutizePackageSource(source: string, baseDir: string): string {
+	return source.startsWith("./") || source.startsWith("../") ? resolve(baseDir, source) : source;
+}
+
 function parseTimeoutSetting(value: unknown, settingName: string): number | undefined {
 	const timeoutMs = parseHttpIdleTimeoutMs(value);
 	if (timeoutMs !== undefined) {
@@ -165,6 +180,11 @@ export interface SettingsManagerCreateOptions {
 
 export interface SettingsStorage {
 	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
+	/**
+	 * A read-only settings file under this scope's own (pi's, for pis), or undefined when there is none. Its values
+	 * apply wherever the scope's own file does not set them; it is never written.
+	 */
+	readBase?(scope: SettingsScope): { content: string; path: string } | undefined;
 }
 
 export interface SettingsError {
@@ -186,12 +206,24 @@ function toSettingsError(scope: SettingsScope, error: unknown, path?: string): S
 export class FileSettingsStorage implements SettingsStorage {
 	private globalSettingsPath: string;
 	private projectSettingsPath: string;
+	private baseSettingsPaths: SettingsPaths;
 
 	constructor(cwd: string, agentDir: string) {
 		const resolvedCwd = resolvePath(cwd);
 		const resolvedAgentDir = resolvePath(agentDir);
 		this.globalSettingsPath = join(resolvedAgentDir, "settings.json");
 		this.projectSettingsPath = join(resolvedCwd, CONFIG_DIR_NAME, "settings.json");
+		const baseAgentDir = getBaseAgentDir(resolvedAgentDir);
+		this.baseSettingsPaths = {
+			global: baseAgentDir ? join(baseAgentDir, "settings.json") : undefined,
+			project: BASE_CONFIG_DIR_NAME ? join(resolvedCwd, BASE_CONFIG_DIR_NAME, "settings.json") : undefined,
+		};
+	}
+
+	readBase(scope: SettingsScope): { content: string; path: string } | undefined {
+		const path = this.baseSettingsPaths[scope];
+		if (!path || !existsSync(path)) return undefined;
+		return { content: readFileSync(path, "utf-8"), path };
 	}
 
 	private acquireLockSyncWithRetry(path: string): () => void {
@@ -368,6 +400,9 @@ export class SettingsManager {
 			return {};
 		}
 
+		const base = storage.readBase?.(scope);
+		const baseSettings = base ? SettingsManager.loadBaseLayer(base.content, base.path) : {};
+
 		let content: string | undefined;
 		storage.withLock(scope, (current) => {
 			content = current;
@@ -375,10 +410,40 @@ export class SettingsManager {
 		});
 
 		if (!content) {
-			return {};
+			return baseSettings;
 		}
 		const settings = JSON.parse(stripBom(content));
-		return SettingsManager.migrateSettings(settings);
+		return deepMergeSettings(baseSettings, SettingsManager.migrateSettings(settings));
+	}
+
+	/**
+	 * Parse a base-layer settings file. Relative resource paths in it are made absolute against its own directory,
+	 * because merged into this scope they would otherwise resolve against `.pis` instead of `.pi`.
+	 */
+	private static loadBaseLayer(content: string, path: string): Settings {
+		let parsed: Record<string, unknown>;
+		try {
+			parsed = JSON.parse(stripBom(content)) as Record<string, unknown>;
+		} catch (error) {
+			throw new Error(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		const settings = SettingsManager.migrateSettings(parsed);
+		const baseDir = dirname(path);
+		const record = settings as Record<string, unknown>;
+		for (const key of ["extensions", "skills", "prompts", "themes"] as const) {
+			const entries = record[key];
+			if (Array.isArray(entries)) record[key] = entries.map((entry) => absolutizeResourceEntry(entry, baseDir));
+		}
+		if (Array.isArray(record.packages)) {
+			record.packages = record.packages.map((pkg: unknown) => {
+				if (typeof pkg === "string") return absolutizePackageSource(pkg, baseDir);
+				if (typeof pkg === "object" && pkg !== null && "source" in pkg && typeof pkg.source === "string") {
+					return { ...pkg, source: absolutizePackageSource(pkg.source, baseDir) };
+				}
+				return pkg;
+			});
+		}
+		return settings;
 	}
 
 	private static tryLoadFromStorage(

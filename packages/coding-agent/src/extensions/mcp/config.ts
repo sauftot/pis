@@ -30,9 +30,9 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { isMcpServerOverride, mcpNamespace } from "@earendil-works/pi-mcp";
-import { CONFIG_DIR_NAME } from "../../config.ts";
+import { BASE_CONFIG_DIR_NAME, CONFIG_DIR_NAME, getAgentDir, getBaseLayerPath } from "../../config.ts";
 import { type McpExposure, type McpServerConfig, validateMcpServerConfig } from "../../core/mcp-servers.ts";
 import { stripBom } from "../../utils/text.ts";
 
@@ -136,9 +136,12 @@ function readConfigFile(path: string, scope: "global" | "project", state: McpCon
  */
 export function loadMcpConfig(options: { agentDir: string; cwd: string; projectTrusted: boolean }): LoadedMcpConfig {
 	const state: McpConfigState = { servers: new Map(), errors: [] };
-	readConfigFile(join(options.agentDir, "mcp.json"), "global", state);
+	const globalConfig = join(options.agentDir, "mcp.json");
+	readConfigFile(layeredMcpConfigPath(globalConfig, baseMcpConfigPath(globalConfig)), "global", state);
 	const projectConfig = options.projectTrusted ? join(options.cwd, CONFIG_DIR_NAME, "mcp.json") : undefined;
-	if (projectConfig) readConfigFile(projectConfig, "project", state);
+	if (projectConfig) {
+		readConfigFile(layeredMcpConfigPath(projectConfig, baseMcpConfigPath(projectConfig)), "project", state);
+	}
 	return {
 		servers: [...state.servers.values()],
 		...(state.autoEnableCodemode === undefined ? {} : { autoEnableCodemode: state.autoEnableCodemode }),
@@ -217,11 +220,41 @@ export function removeMcpServerConfig(path: string, name: string): boolean {
  * Read an `mcp.json` (an empty config when missing), let `edit` change its `mcpServers`, and write
  * it back with its indentation when `edit` returns true. Other content is kept.
  */
+/** The file a scope reads: pis's own, or pi's while pis has none (see {@link editMcpServers} for writes). */
+function layeredMcpConfigPath(own: string, base: string | undefined): string {
+	return existsSync(own) || !base || !existsSync(base) ? own : base;
+}
+
+/**
+ * pis's own file for one of pi's `mcp.json` files (global `~/.pi/agent/mcp.json` or a project's `.pi/mcp.json`),
+ * or `path` itself when it is not pi's. pis never writes pi's files.
+ */
+function ownMcpConfigPath(path: string): string {
+	if (getBaseLayerPath(join(getAgentDir(), basename(path))) === path) return join(getAgentDir(), basename(path));
+	if (BASE_CONFIG_DIR_NAME && basename(dirname(path)) === BASE_CONFIG_DIR_NAME) {
+		return join(dirname(dirname(path)), CONFIG_DIR_NAME, basename(path));
+	}
+	return path;
+}
+
+/** pi's counterpart of one of pis's `mcp.json` files, or undefined when it has none. */
+function baseMcpConfigPath(path: string): string | undefined {
+	const global = getBaseLayerPath(path);
+	if (global) return global;
+	if (BASE_CONFIG_DIR_NAME && basename(dirname(path)) === CONFIG_DIR_NAME) {
+		return join(dirname(dirname(path)), BASE_CONFIG_DIR_NAME, basename(path));
+	}
+	return undefined;
+}
+
 function editMcpServers(
-	path: string,
+	requestedPath: string,
 	edit: (servers: Record<string, unknown> | undefined, parsed: Record<string, unknown>) => boolean,
 ): void {
-	const text = existsSync(path) ? stripBom(readFileSync(path, "utf8")) : undefined;
+	// Edits of pi's file go to pis's own, which starts as a copy of pi's so no server disappears.
+	const path = ownMcpConfigPath(requestedPath);
+	const source = layeredMcpConfigPath(path, baseMcpConfigPath(path));
+	const text = existsSync(source) ? stripBom(readFileSync(source, "utf8")) : undefined;
 	const parsed: unknown = text === undefined ? {} : JSON.parse(text);
 	if (!isRecord(parsed) || (parsed.mcpServers !== undefined && !isRecord(parsed.mcpServers))) {
 		throw new Error(`${path}: expected an object with an "mcpServers" object`);

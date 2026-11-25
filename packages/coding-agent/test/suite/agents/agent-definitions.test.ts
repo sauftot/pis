@@ -11,7 +11,7 @@ describe("discoverAgentDefinitions", () => {
 	});
 
 	function layout() {
-		const root = mkdtempSync(join(tmpdir(), "piss-defs-"));
+		const root = mkdtempSync(join(tmpdir(), "pis-defs-"));
 		dirs.push(root);
 		const userDir = join(root, "user");
 		const project = join(root, "repo");
@@ -25,7 +25,7 @@ describe("discoverAgentDefinitions", () => {
 		`---\nname: ${name}\ndescription: ${name} description\n${extra}---\n\n${body}\n`;
 
 	function discover(cwd: string, userDir: string, includeProject: boolean) {
-		return discoverAgentDefinitions({ cwd, userDir, configDirName: ".pi", includeProject });
+		return discoverAgentDefinitions({ cwd, userDirs: [userDir], configDirNames: [".pi"], includeProject });
 	}
 
 	it("always provides the built-in worker", () => {
@@ -87,5 +87,28 @@ describe("discoverAgentDefinitions", () => {
 		const { userDir, project } = layout();
 		writeFileSync(join(userDir, "odd.md"), agentFile("odd", "tools: 42\n"));
 		expect(discover(project, userDir, false).find((d) => d.name === "odd")?.tools).toBeUndefined();
+	});
+
+	it("layers pis's directories over pi's, user and project alike", () => {
+		const { userDir, project } = layout();
+		const piUserDir = join(userDir, "..", "pi-user");
+		mkdirSync(piUserDir, { recursive: true });
+		mkdirSync(join(project, ".pis", "agents"), { recursive: true });
+		writeFileSync(join(piUserDir, "scout.md"), agentFile("scout", "", "pi scout"));
+		writeFileSync(join(piUserDir, "planner.md"), agentFile("planner", "", "pi planner"));
+		writeFileSync(join(userDir, "scout.md"), agentFile("scout", "", "pis scout"));
+		writeFileSync(join(project, ".pi", "agents", "reviewer.md"), agentFile("reviewer", "", "pi reviewer"));
+		writeFileSync(join(project, ".pis", "agents", "reviewer.md"), agentFile("reviewer", "", "pis reviewer"));
+
+		const found = discoverAgentDefinitions({
+			cwd: project,
+			userDirs: [userDir, piUserDir],
+			configDirNames: [".pis", ".pi"],
+			includeProject: true,
+		});
+		const prompt = (name: string) => found.find((d) => d.name === name)?.systemPrompt.trim();
+		expect(prompt("scout")).toBe("pis scout");
+		expect(prompt("planner")).toBe("pi planner");
+		expect(prompt("reviewer")).toBe("pis reviewer");
 	});
 });

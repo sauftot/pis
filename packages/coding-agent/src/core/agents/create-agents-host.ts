@@ -1,7 +1,7 @@
 // Assembles the agents host for a top-level session from its services.
 
 import { basename, dirname, join } from "node:path";
-import { CONFIG_DIR_NAME } from "../../config.ts";
+import { BASE_CONFIG_DIR_NAME, CONFIG_DIR_NAME, getAgentDirLayers } from "../../config.ts";
 import type { AgentSession } from "../agent-session.ts";
 import type { AgentSessionServices } from "../agent-session-services.ts";
 import type { SessionManager } from "../session-manager.ts";
@@ -26,8 +26,8 @@ export function createSessionAgents(services: AgentSessionServices, sessionManag
 		definitions: () => {
 			definitions ??= discoverAgentDefinitions({
 				cwd: services.cwd,
-				userDir: join(services.agentDir, "agents"),
-				configDirName: CONFIG_DIR_NAME,
+				userDirs: getAgentDirLayers(services.agentDir).map((dir) => join(dir, "agents")),
+				configDirNames: BASE_CONFIG_DIR_NAME ? [CONFIG_DIR_NAME, BASE_CONFIG_DIR_NAME] : [CONFIG_DIR_NAME],
 				includeProject: services.settingsManager.isProjectTrusted(),
 			});
 			return definitions;

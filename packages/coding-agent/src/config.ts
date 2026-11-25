@@ -584,6 +584,8 @@ interface PackageJson {
 	piConfig?: {
 		name?: string;
 		configDir?: string;
+		/** A config directory read under `configDir` and never written, e.g. pi's `.pi` for pis. */
+		baseConfigDir?: string;
 	};
 }
 
@@ -604,6 +606,14 @@ export const PACKAGE_NAME: string = pkg.name || "@earendil-works/pi-coding-agent
 export const APP_NAME: string = piConfigName || "pi";
 export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
 export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".pi";
+/**
+ * The config directory read under {@link CONFIG_DIR_NAME}: pis reads pi's `.pi` so that pi's settings, credentials,
+ * resources and sessions carry over, but writes only to `.pis`. Undefined when there is no base layer.
+ */
+export const BASE_CONFIG_DIR_NAME: string | undefined =
+	pkg.piConfig?.baseConfigDir && pkg.piConfig.baseConfigDir !== CONFIG_DIR_NAME
+		? pkg.piConfig.baseConfigDir
+		: undefined;
 export const VERSION: string = pkg.version || "0.0.0";
 
 // e.g., PI_CODING_AGENT_DIR or TAU_CODING_AGENT_DIR
@@ -633,6 +643,48 @@ export function getAgentDir(): string {
 		return expandTildePath(envDir);
 	}
 	return join(homedir(), CONFIG_DIR_NAME, "agent");
+}
+
+// =============================================================================
+// Base layer (pi's ~/.pi and project .pi, read under pis's own and never written)
+// =============================================================================
+
+/** The base layer's environment override, e.g. PI_CODING_AGENT_DIR for `.pi`. */
+const ENV_BASE_AGENT_DIR = BASE_CONFIG_DIR_NAME
+	? `${BASE_CONFIG_DIR_NAME.replace(/^\./, "").toUpperCase()}_CODING_AGENT_DIR`
+	: undefined;
+
+/**
+ * The base layer's agent dir under `agentDir` (pi's `~/.pi/agent`), or undefined when there is none. Only the
+ * default agent dir has one: an explicit agent dir (SDK hosts, tests) stays isolated from the user's pi config, and
+ * so does a {@link ENV_AGENT_DIR} override unless pi's own override names the pi dir to pair it with.
+ */
+export function getBaseAgentDir(agentDir: string): string | undefined {
+	if (!BASE_CONFIG_DIR_NAME || !ENV_BASE_AGENT_DIR) return undefined;
+	if (resolve(agentDir) !== resolve(getAgentDir())) return undefined;
+	const envDir = process.env[ENV_BASE_AGENT_DIR];
+	if (process.env[ENV_AGENT_DIR] && !envDir) return undefined;
+	const baseDir = envDir ? expandTildePath(envDir) : join(homedir(), BASE_CONFIG_DIR_NAME, "agent");
+	return resolve(baseDir) === resolve(agentDir) ? undefined : baseDir;
+}
+
+/** Agent dirs to read, highest priority first: `agentDir`, then its base layer when it has one. */
+export function getAgentDirLayers(agentDir: string): string[] {
+	const base = getBaseAgentDir(agentDir);
+	return base ? [agentDir, base] : [agentDir];
+}
+
+/** Project config dirs under `cwd` to read, highest priority first: `.pis`, then `.pi`. Only the first is written. */
+export function getProjectConfigDirs(cwd: string): string[] {
+	return BASE_CONFIG_DIR_NAME
+		? [join(cwd, CONFIG_DIR_NAME), join(cwd, BASE_CONFIG_DIR_NAME)]
+		: [join(cwd, CONFIG_DIR_NAME)];
+}
+
+/** The same file in the base layer: `<base agent dir>/<name>` for a file directly in the default agent dir. */
+export function getBaseLayerPath(path: string): string | undefined {
+	const base = getBaseAgentDir(dirname(path));
+	return base ? join(base, basename(path)) : undefined;
 }
 
 /** Get path to user's custom themes directory */
@@ -673,6 +725,12 @@ export function getPromptsDir(): string {
 /** Get path to sessions directory */
 export function getSessionsDir(): string {
 	return join(getAgentDir(), "sessions");
+}
+
+/** pi's sessions directory, for pis: listed by /resume and forked from, never written. Undefined without one. */
+export function getBaseSessionsDir(): string | undefined {
+	const base = getBaseAgentDir(getAgentDir());
+	return base ? join(base, "sessions") : undefined;
 }
 
 /** Get path to debug log file */

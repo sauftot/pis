@@ -1,10 +1,10 @@
-# Agents in piss
+# Agents in pis
 
-piss lets the model delegate work to background subagents, and lets you watch, steer, interrupt and stop them from the chat, without leaving the session.
+pis lets the model delegate work to background subagents, and lets you watch, steer, interrupt and stop them from the chat, without leaving the session.
 
 ## Turn it on
 
-In `~/.pi/agent/settings.json` (or a project's `.pi/settings.json`):
+In `~/.pis/agent/settings.json` (or a project's `.pis/settings.json`; pi's `.pi` files are read too, see [config](./config.md)):
 
 ```json
 { "agents": { "enabled": true } }
@@ -157,7 +157,7 @@ When set, the tool description lists exactly those models. An agent keeps its mo
 
 ## Agent types
 
-`worker` is built in and uses the model rules above. Add your own as markdown files in `~/.pi/agent/agents/` (or `.pi/agents/` in a trusted project):
+`worker` is built in and uses the model rules above. Add your own as markdown files in `~/.pis/agent/agents/` (or `.pis/agents/` in a trusted project). pi's `~/.pi/agent/agents/` and `.pi/agents/` are read too; pis's file wins on a name clash:
 
 ```markdown
 ---

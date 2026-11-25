@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { setTimeout as sleep } from "timers/promises";
-import { getAgentDir } from "../config.ts";
+import { getAgentDir, getBaseLayerPath } from "../config.ts";
 import { raceWithAbortSignal } from "../utils/abort.ts";
 import { getFileRevision, normalizePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
@@ -60,9 +60,12 @@ export interface AuthStorageBackend {
 
 export class FileAuthStorageBackend implements AuthStorageBackend {
 	private authPath: string;
+	/** pi's copy of this file, for pis: the file starts from it when pis first creates its own. Never written. */
+	private seedPath: string | undefined;
 
 	constructor(authPath: string = join(getAgentDir(), "auth.json")) {
 		this.authPath = normalizePath(authPath);
+		this.seedPath = getBaseLayerPath(this.authPath);
 	}
 
 	private ensureParentDir(): void {
@@ -74,7 +77,9 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 
 	private ensureFileExists(): void {
 		if (!existsSync(this.authPath)) {
-			writeFileSync(this.authPath, "{}", AUTH_FILE_WRITE_OPTIONS);
+			// Copy-on-first-use: pis starts with pi's credentials, then keeps its own copy.
+			const seed = this.seedPath && existsSync(this.seedPath) ? readFileSync(this.seedPath, "utf-8") : "{}";
+			writeFileSync(this.authPath, seed, AUTH_FILE_WRITE_OPTIONS);
 		}
 	}
 
@@ -207,7 +212,10 @@ export class ReadOnlyAuthStorage implements CredentialStore {
 	private data: AuthStorageData | undefined;
 
 	constructor(authPath: string = join(getAgentDir(), "auth.json")) {
-		this.authPath = normalizePath(authPath);
+		const normalized = normalizePath(authPath);
+		// Until pis has its own file it uses pi's, as the writable backend would after seeding.
+		const seedPath = getBaseLayerPath(normalized);
+		this.authPath = !existsSync(normalized) && seedPath && existsSync(seedPath) ? seedPath : normalized;
 	}
 
 	private load(): AuthStorageData {

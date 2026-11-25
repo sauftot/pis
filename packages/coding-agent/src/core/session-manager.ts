@@ -26,10 +26,16 @@ import {
 	writeFileSync,
 } from "fs";
 import { readdir, stat } from "fs/promises";
-import { basename, join, resolve } from "path";
+import { basename, isAbsolute, join, relative, resolve } from "path";
 import { createInterface } from "readline";
 import { StringDecoder } from "string_decoder";
-import { APP_NAME, getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts";
+import {
+	APP_NAME,
+	getBaseAgentDir,
+	getBaseSessionsDir,
+	getAgentDir as getDefaultAgentDir,
+	getSessionsDir,
+} from "../config.ts";
 import { normalizePath, pathsEqual, resolvePath } from "../utils/paths.ts";
 import {
 	type BashExecutionMessage,
@@ -592,6 +598,20 @@ function getDefaultSessionDirPath(cwd: string, agentDir: string = getDefaultAgen
 	const resolvedAgentDir = resolvePath(agentDir);
 	const safePath = `--${resolvedCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 	return join(resolvedAgentDir, "sessions", safePath);
+}
+
+/** pi's session dir for `cwd`, for pis, or undefined without a base layer. Never created or written. */
+function getBaseSessionDirPath(cwd: string): string | undefined {
+	const baseAgentDir = getBaseAgentDir(getDefaultAgentDir());
+	return baseAgentDir ? getDefaultSessionDirPath(cwd, baseAgentDir) : undefined;
+}
+
+/** Whether `path` is one of pi's session files, which pis reads but never appends to. */
+function isBaseSessionFile(path: string): boolean {
+	const baseSessionsDir = getBaseSessionsDir();
+	if (!baseSessionsDir) return false;
+	const rel = relative(resolvePath(baseSessionsDir), path);
+	return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultAgentDir()): string {
@@ -1783,6 +1803,12 @@ export class SessionManager {
 	 */
 	static open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {
 		const resolvedPath = resolvePath(path);
+		// pi's sessions are never written: continuing one continues a fork of it in pis's session dir.
+		if (isBaseSessionFile(resolvedPath)) {
+			const header = readSessionHeaderForDiscovery(resolvedPath);
+			const cwd = cwdOverride ?? (header ? getSessionHeaderCwd(header) : undefined) ?? process.cwd();
+			return SessionManager.forkFrom(resolvedPath, cwd, sessionDir);
+		}
 		let header: SessionHeader | null = null;
 		let preloadedFileEntries: FileEntry[] | undefined;
 		if (cwdOverride === undefined && existsSync(resolvedPath)) {
@@ -1812,6 +1838,12 @@ export class SessionManager {
 		const dir = sessionDir ? normalizePath(sessionDir) : getDefaultSessionDir(cwd);
 		const filterCwd = sessionDir !== undefined && !pathsEqual(dir, getDefaultSessionDirPath(cwd));
 		const mostRecent = findMostRecentSession(dir, filterCwd ? cwd : undefined);
+		// With the default dir, pi's most recent session for this cwd counts too, if it is newer; it is forked.
+		const baseDir = sessionDir === undefined ? getBaseSessionDirPath(cwd) : undefined;
+		const baseRecent = baseDir && existsSync(baseDir) ? findMostRecentSession(baseDir) : null;
+		if (baseRecent && (!mostRecent || statSync(baseRecent).mtimeMs > statSync(mostRecent).mtimeMs)) {
+			return SessionManager.forkFrom(baseRecent, cwd, sessionDir);
+		}
 		if (mostRecent) {
 			return new SessionManager(cwd, dir, mostRecent, true);
 		}
@@ -1934,6 +1966,9 @@ export class SessionManager {
 			? (loaded, total, partialSessions) => onProgress(loaded, total, partialSessions?.filter(includeSession))
 			: undefined;
 		const sessions = (await listSessionsFromDir(dir, progress, signal)).filter(includeSession);
+		// The default session dir also lists pi's sessions for this cwd; resuming one forks it into pis.
+		const baseDir = sessionDir === undefined ? getBaseSessionDirPath(cwd) : undefined;
+		if (baseDir && existsSync(baseDir)) sessions.push(...(await listSessionsFromDir(baseDir, undefined, signal)));
 		return sortSessionInfos(sessions);
 	}
 
@@ -1969,14 +2004,24 @@ export class SessionManager {
 			return sortSessionInfos(await listSessionsFromDir(customSessionDir, progress, abortSignal));
 		}
 
-		const sessionsDir = getSessionsDir();
+		// pis's sessions, then pi's (read only: resuming one forks it, see open()).
+		const sessionsRoots = [getSessionsDir(), getBaseSessionsDir()].filter(
+			(dir): dir is string => dir !== undefined && existsSync(dir),
+		);
 
 		try {
-			if (!existsSync(sessionsDir)) return [];
-			const entries = await readdir(sessionsDir, { withFileTypes: true });
-			const dirs = entries
-				.filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
-				.map((entry) => join(sessionsDir, entry.name));
+			if (sessionsRoots.length === 0) return [];
+			const dirs = (
+				await Promise.all(
+					sessionsRoots.map(async (sessionsDir) =>
+						(
+							await readdir(sessionsDir, { withFileTypes: true })
+						)
+							.filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+							.map((entry) => join(sessionsDir, entry.name)),
+					),
+				)
+			).flat();
 
 			const dirFiles = await mapWithConcurrency(
 				dirs,

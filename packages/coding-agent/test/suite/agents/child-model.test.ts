@@ -12,8 +12,8 @@ describe("resolveChildModel", () => {
 	});
 
 	/**
-	 * A runtime whose provider offers `piss-fast` and `piss-smart`. With `otherProvider`, a second authenticated
-	 * provider also offers `piss-fast`, so that bare name is ambiguous.
+	 * A runtime whose provider offers `pis-fast` and `pis-smart`. With `otherProvider`, a second authenticated
+	 * provider also offers `pis-fast`, so that bare name is ambiguous.
 	 */
 	async function runtime(
 		options: { authenticated?: boolean; otherProvider?: boolean } = {},
@@ -44,32 +44,32 @@ describe("resolveChildModel", () => {
 			});
 			return name;
 		};
-		const provider = await register(["piss-fast", "piss-smart"], undefined, options.authenticated !== false);
-		const other = options.otherProvider ? await register(["piss-fast"], "other-faux", true) : undefined;
+		const provider = await register(["pis-fast", "pis-smart"], undefined, options.authenticated !== false);
+		const other = options.otherProvider ? await register(["pis-fast"], "other-faux", true) : undefined;
 		await rt.refresh({ allowNetwork: false });
 		return { runtime: rt, provider, other };
 	}
 
 	it("resolves a bare id, a provider-qualified id and a partial match to the model", async () => {
 		const { runtime: rt, provider } = await runtime();
-		expect(resolveChildModel(rt, "piss-fast").model.id).toBe("piss-fast");
-		expect(resolveChildModel(rt, `${provider}/piss-smart`).model.id).toBe("piss-smart");
-		expect(resolveChildModel(rt, "smart").model.id).toBe("piss-smart");
+		expect(resolveChildModel(rt, "pis-fast").model.id).toBe("pis-fast");
+		expect(resolveChildModel(rt, `${provider}/pis-smart`).model.id).toBe("pis-smart");
+		expect(resolveChildModel(rt, "smart").model.id).toBe("pis-smart");
 	});
 
 	it("reads a thinking level from a suffix", async () => {
 		const { runtime: rt } = await runtime();
-		const resolved = resolveChildModel(rt, "piss-fast:low");
-		expect(resolved.model.id).toBe("piss-fast");
+		const resolved = resolveChildModel(rt, "pis-fast:low");
+		expect(resolved.model.id).toBe("pis-fast");
 		expect(resolved.thinkingLevel).toBe("low");
-		expect(resolveChildModel(rt, "piss-fast").thinkingLevel).toBeUndefined();
+		expect(resolveChildModel(rt, "pis-fast").thinkingLevel).toBeUndefined();
 	});
 
 	it("refuses an unknown model and lists the ones that would work", async () => {
 		const { runtime: rt, provider } = await runtime();
 		const attempt = () => resolveChildModel(rt, "no-such-model");
 		expect(attempt).toThrow('Model "no-such-model" not found');
-		expect(attempt).toThrow(`Available: ${provider}/piss-fast, ${provider}/piss-smart`);
+		expect(attempt).toThrow(`Available: ${provider}/pis-fast, ${provider}/pis-smart`);
 	});
 
 	it("refuses an id the provider does not list instead of inventing a custom model", async () => {
@@ -79,7 +79,7 @@ describe("resolveChildModel", () => {
 
 	it("refuses a model whose provider has no credentials", async () => {
 		const { runtime: rt, provider } = await runtime({ authenticated: false });
-		expect(() => resolveChildModel(rt, "piss-fast")).toThrow(
+		expect(() => resolveChildModel(rt, "pis-fast")).toThrow(
 			`No credentials are configured for provider "${provider}"`,
 		);
 	});
@@ -87,24 +87,24 @@ describe("resolveChildModel", () => {
 	describe("provider preference", () => {
 		it("leaves a name that several authenticated providers offer ambiguous when there is no preference", async () => {
 			const { runtime: rt } = await runtime({ otherProvider: true });
-			expect(() => resolveChildModel(rt, "piss-fast")).toThrow("ambiguous");
+			expect(() => resolveChildModel(rt, "pis-fast")).toThrow("ambiguous");
 		});
 
 		it("resolves a bare name in the parent's provider, whichever provider that is", async () => {
 			const { runtime: rt, provider, other } = await runtime({ otherProvider: true });
-			expect(resolveChildModel(rt, "piss-fast", { preferProvider: provider }).model.provider).toBe(provider);
-			expect(resolveChildModel(rt, "piss-fast", { preferProvider: other }).model.provider).toBe(other);
+			expect(resolveChildModel(rt, "pis-fast", { preferProvider: provider }).model.provider).toBe(provider);
+			expect(resolveChildModel(rt, "pis-fast", { preferProvider: other }).model.provider).toBe(other);
 		});
 
 		it("lets an explicit provider override the preference", async () => {
 			const { runtime: rt, provider, other } = await runtime({ otherProvider: true });
-			expect(resolveChildModel(rt, `${other}/piss-fast`, { preferProvider: provider }).model.provider).toBe(other);
+			expect(resolveChildModel(rt, `${other}/pis-fast`, { preferProvider: provider }).model.provider).toBe(other);
 		});
 
 		it("falls back to the other providers when the preferred one does not offer the model", async () => {
 			const { runtime: rt, other } = await runtime({ otherProvider: true });
-			// `piss-smart` exists only in the first provider; preferring the other one must not make it unreachable.
-			expect(resolveChildModel(rt, "piss-smart", { preferProvider: other }).model.id).toBe("piss-smart");
+			// `pis-smart` exists only in the first provider; preferring the other one must not make it unreachable.
+			expect(resolveChildModel(rt, "pis-smart", { preferProvider: other }).model.id).toBe("pis-smart");
 		});
 
 		it("lists the preferred provider's models first when a model is not found", async () => {
@@ -117,19 +117,17 @@ describe("resolveChildModel", () => {
 				}
 				return "";
 			};
-			expect(message(other)).toContain(
-				`Available: ${other}/piss-fast, ${provider}/piss-fast, ${provider}/piss-smart.`,
-			);
+			expect(message(other)).toContain(`Available: ${other}/pis-fast, ${provider}/pis-fast, ${provider}/pis-smart.`);
 			expect(message(provider)).toContain(
-				`Available: ${provider}/piss-fast, ${provider}/piss-smart, ${other}/piss-fast.`,
+				`Available: ${provider}/pis-fast, ${provider}/pis-smart, ${other}/pis-fast.`,
 			);
 		});
 
 		it("keeps the allowlist and the existence check in force", async () => {
 			const { runtime: rt, provider } = await runtime({ otherProvider: true });
-			expect(() =>
-				resolveChildModel(rt, "piss-fast", { preferProvider: provider, allowed: ["piss-smart"] }),
-			).toThrow("not allowed");
+			expect(() => resolveChildModel(rt, "pis-fast", { preferProvider: provider, allowed: ["pis-smart"] })).toThrow(
+				"not allowed",
+			);
 			expect(() => resolveChildModel(rt, "nope", { preferProvider: provider })).toThrow("not found");
 		});
 	});
@@ -137,34 +135,34 @@ describe("resolveChildModel", () => {
 	describe("allowlist", () => {
 		it("accepts a model any allowed pattern resolves to, however it is spelled", async () => {
 			const { runtime: rt, provider } = await runtime();
-			expect(resolveChildModel(rt, "piss-fast", { allowed: ["piss-fast"] }).model.id).toBe("piss-fast");
-			expect(resolveChildModel(rt, `${provider}/piss-fast`, { allowed: ["piss-fast"] }).model.id).toBe("piss-fast");
-			expect(resolveChildModel(rt, "piss-fast", { allowed: [`${provider}/piss-smart`, "piss-fast"] }).model.id).toBe(
-				"piss-fast",
+			expect(resolveChildModel(rt, "pis-fast", { allowed: ["pis-fast"] }).model.id).toBe("pis-fast");
+			expect(resolveChildModel(rt, `${provider}/pis-fast`, { allowed: ["pis-fast"] }).model.id).toBe("pis-fast");
+			expect(resolveChildModel(rt, "pis-fast", { allowed: [`${provider}/pis-smart`, "pis-fast"] }).model.id).toBe(
+				"pis-fast",
 			);
 		});
 
 		it("refuses a model outside the list and names what is allowed", async () => {
 			const { runtime: rt } = await runtime();
-			expect(() => resolveChildModel(rt, "piss-smart", { allowed: ["piss-fast"] })).toThrow(
-				'Model "piss-smart" is not allowed for subagents. Allowed: piss-fast.',
+			expect(() => resolveChildModel(rt, "pis-smart", { allowed: ["pis-fast"] })).toThrow(
+				'Model "pis-smart" is not allowed for subagents. Allowed: pis-fast.',
 			);
 		});
 
 		it("allows nothing for an empty list", async () => {
 			const { runtime: rt } = await runtime();
-			expect(() => resolveChildModel(rt, "piss-fast", { allowed: [] })).toThrow("not allowed");
+			expect(() => resolveChildModel(rt, "pis-fast", { allowed: [] })).toThrow("not allowed");
 		});
 
 		it("ignores allowed entries that resolve to nothing", async () => {
 			const { runtime: rt } = await runtime();
-			expect(() => resolveChildModel(rt, "piss-fast", { allowed: ["typo"] })).toThrow("not allowed");
-			expect(resolveChildModel(rt, "piss-fast", { allowed: ["typo", "piss-fast"] }).model.id).toBe("piss-fast");
+			expect(() => resolveChildModel(rt, "pis-fast", { allowed: ["typo"] })).toThrow("not allowed");
+			expect(resolveChildModel(rt, "pis-fast", { allowed: ["typo", "pis-fast"] }).model.id).toBe("pis-fast");
 		});
 
 		it("checks existence before the list, so a typo says not found", async () => {
 			const { runtime: rt } = await runtime();
-			expect(() => resolveChildModel(rt, "nope", { allowed: ["piss-fast"] })).toThrow("not found");
+			expect(() => resolveChildModel(rt, "nope", { allowed: ["pis-fast"] })).toThrow("not found");
 		});
 	});
 });

@@ -1,4 +1,4 @@
-// Public surface of the piss agent layer.
+// Public surface of the pis agent layer.
 
 export {
 	ACTIVITY_KIND_FILTERS,

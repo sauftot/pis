@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
-import { CONFIG_DIR_NAME } from "../config.ts";
+import { getBaseLayerPath, getProjectConfigDirs } from "../config.ts";
 import { canonicalizePath, pathsEqual, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 
@@ -195,9 +195,10 @@ export function hasTrustRequiringProjectResources(cwd: string): boolean {
 	const userAgentsSkillsDir = join(homeDir, ".agents", "skills");
 	let currentDir = canonicalizePath(resolvePath(cwd));
 
-	const configDir = join(currentDir, CONFIG_DIR_NAME);
-	if (TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES.some((entry) => existsSync(join(configDir, entry)))) {
-		return true;
+	for (const configDir of getProjectConfigDirs(currentDir)) {
+		if (TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES.some((entry) => existsSync(join(configDir, entry)))) {
+			return true;
+		}
 	}
 
 	while (true) {
@@ -216,9 +217,12 @@ export function hasTrustRequiringProjectResources(cwd: string): boolean {
 
 export class ProjectTrustStore {
 	private trustPath: string;
+	/** pi's trust.json, for pis: its decisions apply where pis has none. Never written. */
+	private baseTrustPath: string | undefined;
 
 	constructor(agentDir: string) {
 		this.trustPath = join(resolvePath(agentDir), "trust.json");
+		this.baseTrustPath = getBaseLayerPath(this.trustPath);
 	}
 
 	get(cwd: string): ProjectTrustDecision {
@@ -227,7 +231,10 @@ export class ProjectTrustStore {
 
 	getEntry(cwd: string): ProjectTrustStoreEntry | null {
 		return withTrustFileLock(this.trustPath, () => {
-			const data = readTrustFile(this.trustPath);
+			const data = {
+				...(this.baseTrustPath ? readTrustFile(this.baseTrustPath) : {}),
+				...readTrustFile(this.trustPath),
+			};
 			return findNearestTrustEntry(data, cwd);
 		});
 	}

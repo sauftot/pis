@@ -1,8 +1,8 @@
-# piss: Agent Hub and in-chat agent steering (spec, draft 1)
+# pis: Agent Hub and in-chat agent steering (spec, draft 1)
 
-piss is a fork of pi (`earendil-works/pi`, coding-agent 1.5.x). Goal: manage subagents from inside the chat the way omp (`can1357/oh-my-pi`) does: see them, read them, steer them, kill and revive them, without leaving the session.
+pis is a fork of pi (`earendil-works/pi`, coding-agent 1.5.x). Goal: manage subagents from inside the chat the way omp (`can1357/oh-my-pi`) does: see them, read them, steer them, kill and revive them, without leaving the session.
 
-Status: phases 1, 2 and 3 implemented (core in `packages/coding-agent/src/core/agents/`, UI in `src/modes/interactive/agents/`; 294 tests in `test/suite/agents/`, including the real InteractiveMode driven on a virtual terminal). Enable with `agents.enabled`. User guide: [agents.md](./agents.md). Phase 4 (activity log, tree/flat, filter, report renderer) is done; phase 5 (extension `ctx.agents`, `ctx.ui.focusAgent`, RPC commands, SDK access, the steerable subagent example) is done; phase 6 not started.
+Status: phase 0 (the pis rename, `.pis` over pi's `.pi`: 7i) and phases 1, 2 and 3 implemented (core in `packages/coding-agent/src/core/agents/`, UI in `src/modes/interactive/agents/`; 294 tests in `test/suite/agents/`, including the real InteractiveMode driven on a virtual terminal). Enable with `agents.enabled`. User guide: [agents.md](./agents.md). Phase 4 (activity log, tree/flat, filter, report renderer) is done; phase 5 (extension `ctx.agents`, `ctx.ui.focusAgent`, RPC commands, SDK access, the steerable subagent example) is done; phase 6 not started.
 
 ## 1. Problem
 
@@ -39,7 +39,7 @@ Key insight: steering is "talk to a live `AgentSession` by id, and let the sessi
 - Extension API: `registerTool`, `registerCommand`, `registerShortcut`, `setWidget`, `custom({overlay})`, `registerMessageRenderer`, `sendMessage`.
 - RPC mode with `prompt`, `steer`, `follow_up`, `abort`, `get_state`, `get_messages`, `switch_session` (`docs/rpc-commands.md`).
 
-## 4. Gaps (what piss adds)
+## 4. Gaps (what pis adds)
 
 1. No registry: nothing knows which subagents exist, their status, or their parent.
 2. Subagents are subprocesses with `--no-session`: no persistence, no steering channel, no revive.
@@ -80,7 +80,7 @@ Messages and replies are written to the child's persisted session, so the transc
 
 ### D4. Reuse omp's vocabulary and ids
 
-`running | idle | parked | aborted`, `main | sub | advisor` kinds (advisor deferred), AdjectiveNoun default ids, ids unique per session. Keeps docs and muscle memory transferable. License: omp and pi are both MIT (omp adds Can Bölük and Stencil Labs copyright lines). Verbatim reuse is allowed if the omp copyright notice is added to piss's LICENSE and kept on copied files. Still prefer reimplementing against pi's APIs: omp's code assumes its own `AgentSession`, settings and tui packages.
+`running | idle | parked | aborted`, `main | sub | advisor` kinds (advisor deferred), AdjectiveNoun default ids, ids unique per session. Keeps docs and muscle memory transferable. License: omp and pi are both MIT (omp adds Can Bölük and Stencil Labs copyright lines). Verbatim reuse is allowed if the omp copyright notice is added to pis's LICENSE and kept on copied files. Still prefer reimplementing against pi's APIs: omp's code assumes its own `AgentSession`, settings and tui packages.
 
 ## 6. Spec
 
@@ -190,7 +190,7 @@ Then port `examples/extensions/subagent` to use it (child steerable, listed in H
 
 | Phase | Deliverable | Exit test |
 |-------|-------------|-----------|
-| 0 | Fork hygiene: rename branding to piss (package scope, binary `piss`, config dir `.piss` or keep `.pi` per decision O1), upstream remote, CI check | `npm run check` green, `piss --version` |
+| 0 (done) | Fork hygiene: rename branding to pis (binary `pis`, config dir `.pis` over pi's `.pi`, decision O1), upstream remote | `npm run check` green, `pis --version` |
 | 1 (done) | Registry + lifecycle + bus, headless. `AgentSession.deliverAgentMessage`. Unit tests with faux provider harness (`test/suite/harness.ts`): steer running, prompt idle, revive parked, failed unknown, broadcast rules, stale-generation guard | tests pass |
 | 2 (done) | `task` tool + `message_agent` tool, persistence under `agents/`, result delivery to parent, concurrency/depth limits | model can spawn 2 agents, message one mid-run, parent gets both results |
 | 3 (done) | Focus controller + `/agents` roster (no overlay yet) + footer indicator | user focuses a running child, steers it, returns to main; no duplicated messages |
@@ -339,18 +339,39 @@ With agents off, print mode is unchanged: the helper returns at once (upstream's
 
 Live effect: park time, depth and `allowedModels` were already read on every use. `maxConcurrency` was read once, when the host was built, so `Semaphore` gained `setLimit` and the host re-reads the setting before each acquire and after each release. A higher limit starts queued agents at once; a lower one lets running agents finish. `enabled` decides whether a session gets an agents host at all, so it applies to the next session; the menu text says so.
 
+## 7i. Phase 0: the pis rename and the `.pi` base layer (as built)
+
+Branding is the upstream mechanism: `piConfig` in `packages/coding-agent/package.json` sets `name: "pis"` and `configDir: ".pis"`, so the command, title, `PIS_*` env vars and `~/.pis/agent` all follow from `APP_NAME` and `CONFIG_DIR_NAME`. The npm package name stays `@earendil-works/pi-coding-agent` to keep upstream merges cheap. The bin is `pis`.
+
+New: `piConfig.baseConfigDir: ".pi"`, a config directory read under `configDir` and never written. `config.ts` exposes it as `BASE_CONFIG_DIR_NAME`, plus `getBaseAgentDir`, `getAgentDirLayers`, `getProjectConfigDirs`, `getBaseLayerPath` and `getBaseSessionsDir`. Each consumer then applies one of three rules, chosen by what it stores (user guide: [config.md](./config.md)):
+
+- Merge, `.pis` winning: `settings.json` (per key, through `SettingsStorage.readBase`), `keybindings.json` (per action), `trust.json` (per folder), auto-discovered resources and agent definitions (per name).
+- Copy on first use: `auth.json`, `mcp-auth.json` (seeded in `FileAuthStorageBackend.ensureFileExists`) and `mcp.json` (seeded in `editMcpServers`). Credentials are a single document with rotation and logout; a per-key merge would make a logout of a pi credential impossible.
+- Read fallback: `models.json`, the global `AGENTS.md`, `SYSTEM.md`, installed npm and git packages (loading only; installs and updates target `.pis`).
+- Sessions: listed from both; opening one of pi's forks it into `.pis` (`SessionManager.open`, `continueRecent`), so a pi transcript is never appended to.
+
+Why the merge stays write-safe: `SettingsManager` saves only the keys modified in the session, merged into the file on disk, so pi's values are visible in memory but are never copied into `.pis` unless changed. Relative resource paths in pi's settings are made absolute against pi's directory when loaded, since merged into pis's scope they would otherwise resolve against `.pis`.
+
+Isolation: only the default agent dir has a base layer. An explicit `agentDir` (SDK, tests) has none, and so does `PIS_CODING_AGENT_DIR` set alone; set `PI_CODING_AGENT_DIR` with it to pair the two. Found when a session-discovery test that set only the pis variable listed the developer's real pi sessions.
+
+Also: the startup update notice is off for pis (pi's npm releases are not its updates), and user-facing strings that hardcoded `pi` or `.pi/` now use `APP_NAME` and `CONFIG_DIR_NAME`.
+
+Tests: `test/suite/pis/base-layer.test.ts` covers every rule above with both env vars pointed at temp dirs. Upstream tests that hardcoded the `pi` name or a `.pi` project dir now use `APP_NAME` and `CONFIG_DIR_NAME`. Two official-only behaviours are skipped for rebrands: first-time setup and presenting pi.dev's OAuth client documents. The full coding-agent suite has no failures beyond the Windows-only ones it had before.
+
+Not covered: the standalone SDK discovery helpers (`discoverAndLoadExtensions`, `loadSkills` and `loadPromptTemplates` with `includeDefaults`) read only pis's directories; the CLI does not use them. A pi resource cannot be removed from pis except by overriding it in pis's files.
+
 ## 8. Risks
 
 - `interactive-mode.ts` is 7.3k lines with session binding spread across it (`renderInitialMessages`, `rebuildChatFromMessages`, footer, editor handlers, extension UI context). Focus must retarget all of them. Mitigation: introduce one `ViewTarget` indirection first (phase 3a), refactor with no behavior change, then add focus.
 - Event dedupe between rebuild and live subscribe (see 6.5).
 - Revive races: park vs message vs kill. Mitigation: generation guards and coalesced `ensureLive`, ported tests.
 - Cost/context blowup from many concurrent children: concurrency cap and usage shown in the roster.
-- Upstream drift: piss tracks `upstream/main`. Keep new code under `core/agents/` and `modes/interactive/agents/` with thin hook points in existing files to keep rebases cheap.
+- Upstream drift: pis tracks `upstream/main`. Keep new code under `core/agents/` and `modes/interactive/agents/` with thin hook points in existing files to keep rebases cheap.
 - Security: children inherit parent tools and cwd. Default child tool set honors agent definition `tools`; project-trust rules (`core/project-trust.ts`) must apply to project-level agent definitions.
 
 ## 9. Manual QA script (phase 4)
 
-1. `piss`, ask it to spawn two scouts on a large repo. Hub shows two `running` rows.
+1. `pis`, ask it to spawn two scouts on a large repo. Hub shows two `running` rows.
 2. Alt+A, select one, Enter. Transcript swaps; footer shows the agent name.
 3. Type a redirect. It appears in the child's transcript and the child changes course.
 4. Esc on empty editor returns to main with no duplicated or missing messages.
@@ -360,8 +381,8 @@ Live effect: park time, depth and `allowedModels` were already read on every use
 
 ## 10. Open questions
 
-- O1. Branding scope: rename config dir (`~/.pi` to `~/.piss`) or stay compatible so piss and pi share settings and sessions? Recommend staying on `~/.pi` initially (zero migration, sessions interchangeable) with an env override; decide before phase 0.
-- O2. Resolved: public repo `sauftot/piss` on GitHub.
+- O1. Resolved: both. pis has its own `~/.pis` and `.pis`, and reads pi's `~/.pi` and `.pi` underneath without writing them (7i).
+- O2. Resolved: public repo `sauftot/pis` on GitHub.
 - O3. Resolved: in-process children for v1 (D1).
 - O4. Resolved: `task` coexists with the example `subagent` extension; neither replaces the other.
-- O5. Resolved: both MIT. Add omp's copyright line to piss's LICENSE if any code is copied verbatim.
+- O5. Resolved: both MIT. Add omp's copyright line to pis's LICENSE if any code is copied verbatim.

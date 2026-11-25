@@ -168,7 +168,7 @@ On native Windows, `app.suspend` has no default because Windows terminals do not
 
 ### Agents
 
-Active when `agents.enabled` is set. See [agents](../../../docs/piss/agents.md) for what they do.
+Active when `agents.enabled` is set. See [agents](../../../docs/pis/agents.md) for what they do.
 
 | Keybinding id | Default | Description |
 |--------|---------|-------------|

@@ -69,7 +69,7 @@ describe("agent persistence across a restart", () => {
 	}
 
 	const newRoot = () => {
-		const dir = mkdtempSync(join(tmpdir(), "piss-persist-"));
+		const dir = mkdtempSync(join(tmpdir(), "pis-persist-"));
 		dirs.push(dir);
 		return dir;
 	};

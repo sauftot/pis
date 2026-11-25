@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
+import { getBaseLayerPath } from "../config.ts";
 import { stripJsonComments } from "../utils/json.ts";
 import { normalizePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
@@ -173,6 +174,11 @@ export class ModelConfig {
 		try {
 			content = await readFile(path, "utf-8");
 		} catch (error) {
+			// Without its own models.json, pis uses pi's. It never writes the file, so there is nothing to seed.
+			const basePath = getBaseLayerPath(path);
+			if ((error as NodeJS.ErrnoException).code === "ENOENT" && basePath) {
+				return ModelConfig.load(basePath);
+			}
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") return new ModelConfig(new Map());
 			return new ModelConfig(
 				new Map(),
